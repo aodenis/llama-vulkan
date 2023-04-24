@@ -59,11 +59,13 @@ struct llama_sp_bigram {
 };
 
 class ggml_file {
+    friend class llava_context;
 public:
     ggml_file(const char* filepath);
     ~ggml_file();
     void print_info() const;
     void tokenize(std::vector<uint32_t> &output, const std::string &text, bool bos);
+    std::vector<ggml_data_descriptor> const& get_buffers();
 
 private:
     uint8_t* mapping = nullptr;

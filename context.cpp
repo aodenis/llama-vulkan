@@ -1,6 +1,5 @@
 #include "llava_context.h"
 #include <iostream>
-#include <fstream>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <csignal>
@@ -9,6 +8,10 @@
 
 using namespace std;
 namespace vkr = vk::raii;
+
+// Constant for now !
+const uint32_t heapIndex = 1;
+const uint32_t memoryTypeIndex = 3;
 
 void slurp_file(vector<uint8_t>& out, const char* path) {
     int fd = open(path, O_RDONLY);
@@ -85,35 +88,16 @@ int llava_context::run(int argc, char **argv) try {
     vkr::PipelineCache pipelineCache(*device, {{}, 0, nullptr});
     vkr::ShaderModule computeShaderModule(*device, vk::ShaderModuleCreateInfo({}, shader_code.size(), (uint32_t const*)shader_code.data()));
 
-    // Create buffer
-    vk::DeviceSize bufferSize = 1024*8;
-    vkr::Buffer stagingBuffer(*device, {{}, bufferSize, vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer});
-    vk::MemoryRequirements requirements = stagingBuffer.getMemoryRequirements();
-    cout << "size: " << requirements.size << endl;
-    cout << "bits: " << requirements.memoryTypeBits << endl;
-    cout << "alignment: " << requirements.alignment << endl;
+    // Create buffers
     vk::PhysicalDeviceMemoryProperties memoryProperties = physicalDevice->getMemoryProperties();
-    uint32_t memoryType = memoryProperties.memoryTypeCount;
-    for(uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
-        if ((requirements.memoryTypeBits & (1 << i)) == 0) {
-            continue;
-        }
-        if ((memoryProperties.memoryTypes[i].propertyFlags & (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)) != (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)) {
-            continue;
-        }
-        memoryType = i;
-        break;
-    }
-    assert(memoryType != memoryProperties.memoryTypeCount);
-    vkr::DeviceMemory stagingBufferMemory(*device, {requirements.size, memoryType});
-    stagingBuffer.bindMemory(*stagingBufferMemory, 0);
+    assert(memoryProperties.memoryTypeCount > memoryTypeIndex);
+    assert(memoryProperties.memoryHeapCount > heapIndex);
+    assert((memoryProperties.memoryTypes[memoryTypeIndex].propertyFlags & (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)) == (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent));
 
-    void* data = stagingBufferMemory.mapMemory(0, bufferSize);
-    memset(data, 0, (size_t)bufferSize);
-    stagingBufferMemory.unmapMemory();
+    build_buffers();
     // end
 
-
+/*
     // Descriptor set
     vk::DescriptorSetLayoutBinding layoutBinding(0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute);
     vkr::DescriptorSetLayout descriptorSetLayout(*device, {{}, 1, &layoutBinding});
@@ -142,9 +126,7 @@ int llava_context::run(int argc, char **argv) try {
     queue.submit({submitInfo});
 
     queue.waitIdle();
-    auto* data2 = (uint32_t*)(stagingBufferMemory.mapMemory(0, bufferSize));
-    cout << "result : " << data2[0] << " " << data2[1] << " " << data2[2] << " " << data2[3] << endl;
-    stagingBufferMemory.unmapMemory();
+    */
     return 0;
 } catch (vk::SystemError &err) {
     cerr << "vkr::SystemError: " << err.what() << endl;
@@ -152,4 +134,19 @@ int llava_context::run(int argc, char **argv) try {
 } catch (exception &err) {
     cerr << "std::exception: " << err.what() << endl;
     return 1;
+}
+
+void llava_context::build_buffers() {
+    for (auto& table : this->model->get_buffers()) {
+        vkr::Buffer stagingBuffer(*device, {{}, table.size, vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer});
+        vk::MemoryRequirements requirements = stagingBuffer.getMemoryRequirements();
+        assert((requirements.memoryTypeBits & (1 << memoryTypeIndex)) != 0);
+        vkr::DeviceMemory stagingBufferMemory(*device, {requirements.size, memoryTypeIndex});
+        stagingBuffer.bindMemory(*stagingBufferMemory, 0);
+
+        void* data = stagingBufferMemory.mapMemory(0, table.size);
+        memcpy(data, this->model->mapping + table.offset, (size_t)table.size);
+        stagingBufferMemory.unmapMemory();
+        model_buffers.emplace_back(std::move(stagingBuffer), std::move(stagingBufferMemory));
+    }
 }

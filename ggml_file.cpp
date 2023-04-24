@@ -286,3 +286,7 @@ void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text,
     }
     // Note : Result is not the same as in llama.cpp as multiple tokens can have the same value
 }
+
+std::vector<ggml_data_descriptor> const &ggml_file::get_buffers() {
+    return tables;
+}
