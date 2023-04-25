@@ -12,7 +12,7 @@ public:
     shared_ptr<vkr::Context> get_context();
     shared_ptr<vkr::Device> get_device();
     shared_ptr<vkr::CommandPool> get_command_pool();
-    shared_ptr<vkr::DescriptorPool> get_descriptorPool();
+    shared_ptr<vkr::DescriptorPool> get_descriptor_pool();
     shared_ptr<vkr::PipelineCache> get_pipeline_cache();
     shared_ptr<vkr::Queue> get_queue();
 
@@ -25,9 +25,9 @@ private:
     shared_ptr<vkr::Instance> vulkan_instance;
     shared_ptr<vkr::PhysicalDevice> physicalDevice;
     shared_ptr<vkr::Device> device;
-    shared_ptr<vkr::CommandPool> commandPool;
-    shared_ptr<vkr::DescriptorPool> descriptorPool;
-    shared_ptr<vkr::PipelineCache> pipelineCache;
+    shared_ptr<vkr::CommandPool> command_pool;
+    shared_ptr<vkr::DescriptorPool> descriptor_pool;
+    shared_ptr<vkr::PipelineCache> pipeline_cache;
     shared_ptr<vkr::Queue> queue;
 
     vector<pair<vkr::Buffer, vkr::DeviceMemory>> model_buffers;

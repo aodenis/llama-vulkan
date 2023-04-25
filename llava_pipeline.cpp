@@ -30,9 +30,9 @@ vkr::ShaderModule createShaderModule(const shared_ptr<llava_context>& ctx, const
 
 vkr::DescriptorSetLayout createDescriptorSetLayout(const shared_ptr<llava_context>& ctx, uint32_t argument_count) {
     vector<vk::DescriptorSetLayoutBinding> bindings;
-    bindings.resize(argument_count);
+    bindings.reserve(argument_count);
     while(bindings.size() < argument_count) {
-        bindings.emplace_back(0, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute);
+        bindings.emplace_back(bindings.size(), vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute);
     }
     return {*(ctx->get_device()), {{}, argument_count, bindings.data()}};
 }
@@ -58,5 +58,6 @@ void llava_pipeline::simple_call(const vector<vkr::Buffer *> &buffers, uint32_t 
 }
 
 shared_ptr<llava_context> llava_pipeline::get_context() const {
+    assert(not w_context.expired());
     return w_context.lock();
 }

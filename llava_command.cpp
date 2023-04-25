@@ -8,7 +8,7 @@ llava_command::llava_command(llava_pipeline *pipeline,
                              uint32_t countY,
                              uint32_t countZ) :
                              w_context(pipeline->get_context()),
-                             descriptorSet(std::move(pipeline->get_context()->get_device()->allocateDescriptorSets({pipeline->get_context()->get_descriptorPool()->operator*(), 1, &*pipeline->descriptorSetLayout}).front())),
+                             descriptorSet(std::move(pipeline->get_context()->get_device()->allocateDescriptorSets({pipeline->get_context()->get_descriptor_pool()->operator*(), 1, &*pipeline->descriptorSetLayout}).front())),
                              commandBuffer(std::move(pipeline->get_context()->get_device()->allocateCommandBuffers({**pipeline->get_context()->get_command_pool(), vk::CommandBufferLevel::ePrimary, 1}).front())),
                              submitInfo(0, nullptr, nullptr, 1, &*commandBuffer)
 {
@@ -35,6 +35,8 @@ llava_command::llava_command(llava_pipeline *pipeline,
 }
 
 void llava_command::run_sync() {
-    w_context.lock()->get_queue()->submit({submitInfo});
-    w_context.lock()->get_queue()->waitIdle();
+    assert(not w_context.expired());
+    auto context = w_context.lock();
+    context->get_queue()->submit({submitInfo});
+    context->get_queue()->waitIdle();
 }

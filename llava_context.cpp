@@ -35,8 +35,6 @@ uint32_t llava_context::get_queue_family_index() {
 int llava_context::run(int argc, char **argv) try {
     model = std::make_shared<ggml_file>("/home/denis/Documents/CProj/llm-conv/ggml-model-q4_0-7B.bin");
     model->print_info();
-    vector<uint32_t> tokens;
-    model->tokenize(tokens, " Yohoho", true);
 
     // initialize the vkr::ApplicationInfo structure
     vk::ApplicationInfo applicationInfo("llm", 1, "llm0", 1, VK_API_VERSION_1_3);
@@ -56,18 +54,18 @@ int llava_context::run(int argc, char **argv) try {
     device = make_shared<vkr::Device>(std::move(vkr::Device(*physicalDevice, {vk::DeviceCreateFlags(), deviceQueueCreateInfo})));
 
     // create a CommandPool to allocate a CommandBuffer from
-    commandPool = make_shared<vkr::CommandPool>(std::move(vkr::CommandPool(*device, {{}, queueFamilyIndex})));
+    command_pool = make_shared<vkr::CommandPool>(std::move(vkr::CommandPool(*device, {{}, queueFamilyIndex})));
 
     // Descriptor pool
-    vk::DescriptorPoolSize descriptorPoolSize(vk::DescriptorType::eStorageBuffer, 1);
-    descriptorPool = make_shared<vkr::DescriptorPool>(std::move(vkr::DescriptorPool(*device, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-                                                                            1024, 1, &descriptorPoolSize))));
+    vk::DescriptorPoolSize descriptorPoolSize(vk::DescriptorType::eStorageBuffer, 8);
+    descriptor_pool = make_shared<vkr::DescriptorPool>(std::move(vkr::DescriptorPool(*device, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+                                                                                                                           1024, 1, &descriptorPoolSize))));
 
     // Queue
     queue = make_shared<vkr::Queue>(*device, queueFamilyIndex, 0);
 
     // Pipeline cache
-    pipelineCache = make_shared<vkr::PipelineCache>(*device, vk::PipelineCacheCreateInfo({}, 0, nullptr));
+    pipeline_cache = make_shared<vkr::PipelineCache>(*device, vk::PipelineCacheCreateInfo({}, 0, nullptr));
 
     // Create buffers
     vk::PhysicalDeviceMemoryProperties memoryProperties = physicalDevice->getMemoryProperties();
@@ -90,28 +88,37 @@ int llava_context::run(int argc, char **argv) try {
 
 void llava_context::build_base_buffers(llava_pipeline* q4_0_split_pipeline) {
     for (auto& table : this->model->get_buffers()) {
+        cout << table.name << " (" << table.shape1 << ", " << table.shape2 << "), size in file: " << table.size_in_file() << " type " << table.ftype << endl;
+
+        if (table.ftype != GGML_TYPE_Q4_0) {
+            cout << "Bad type ! " << endl;
+            continue;
+        }
         uint32_t element_count = table.shape2 * table.shape1;
         element_count = (element_count + 1023) & ~1023U;
-        assert(table.ftype == GGML_TYPE_Q4_0);
+        uint32_t block_count = element_count / 16;
+        block_count = (block_count + 1023) & ~1023U;
+
+
         auto wantedBits = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
-        vkr::Buffer stagingBuffer(*device, {{}, element_count * 2, wantedBits});
+        vkr::Buffer stagingBuffer(*device, {{}, block_count * 20, wantedBits});
         vk::MemoryRequirements requirements = stagingBuffer.getMemoryRequirements();
         assert((requirements.memoryTypeBits & (1 << memoryTypeIndex)) != 0);
         vkr::DeviceMemory stagingBufferMemory(*device, {requirements.size, memoryTypeIndex});
         stagingBuffer.bindMemory(*stagingBufferMemory, 0);
 
-        vkr::Buffer DBuffer(*device, {{}, element_count * 2, wantedBits});
-        vkr::DeviceMemory DBufferMemory(*device, {stagingBuffer.getMemoryRequirements().size, memoryTypeIndex});
+        vkr::Buffer DBuffer(*device, {{}, block_count * 4, wantedBits});
+        vkr::DeviceMemory DBufferMemory(*device, {DBuffer.getMemoryRequirements().size, memoryTypeIndex});
         DBuffer.bindMemory(*DBufferMemory, 0);
 
-        vkr::Buffer QBuffer(*device, {{}, element_count * 2, wantedBits});
-        vkr::DeviceMemory QBufferMemory(*device, {stagingBuffer.getMemoryRequirements().size, memoryTypeIndex});
+        vkr::Buffer QBuffer(*device, {{}, block_count * 16, wantedBits});
+        vkr::DeviceMemory QBufferMemory(*device, {QBuffer.getMemoryRequirements().size, memoryTypeIndex});
         QBuffer.bindMemory(*QBufferMemory, 0);
 
         void* data = stagingBufferMemory.mapMemory(0, table.size);
         memcpy(data, this->model->mapping + table.offset, (size_t)table.size);
         stagingBufferMemory.unmapMemory();
-        q4_0_split_pipeline->simple_call({&stagingBuffer, &QBuffer, &DBuffer}, element_count / 1024);
+        q4_0_split_pipeline->simple_call({&stagingBuffer, &QBuffer, &DBuffer}, block_count / 1024);
 
         model_buffers.emplace_back(std::move(DBuffer), std::move(DBufferMemory));
         model_buffers.emplace_back(std::move(QBuffer), std::move(QBufferMemory));
@@ -129,18 +136,18 @@ shared_ptr<vkr::Device> llava_context::get_device() {
 }
 
 shared_ptr<vkr::CommandPool> llava_context::get_command_pool() {
-    assert(commandPool != nullptr);
-    return commandPool;
+    assert(command_pool != nullptr);
+    return command_pool;
 }
 
-shared_ptr<vkr::DescriptorPool> llava_context::get_descriptorPool() {
-    assert(descriptorPool != nullptr);
-    return descriptorPool;
+shared_ptr<vkr::DescriptorPool> llava_context::get_descriptor_pool() {
+    assert(descriptor_pool != nullptr);
+    return descriptor_pool;
 }
 
 shared_ptr<vkr::PipelineCache> llava_context::get_pipeline_cache() {
-    assert(pipelineCache != nullptr);
-    return pipelineCache;
+    assert(pipeline_cache != nullptr);
+    return pipeline_cache;
 }
 
 shared_ptr<vkr::Queue> llava_context::get_queue() {

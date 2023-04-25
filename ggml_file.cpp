@@ -120,11 +120,7 @@ void ggml_file::print_info() const {
     cout << "     n_heads: " << header.n_heads << "\n";
     cout << "    n_layers: " << header.n_layers << "\n";
     cout << "         rot: " << header.rot << "\n";
-    cout << "       ftype: " << header.ftype << "\n";
-    for (auto& x : tables) {
-        cout << x.name << " (" << x.shape1 << ", " << x.shape2 << "), size in file: " << x.size_in_file() << " depacked " << x.size_for_type(GGML_TYPE_F16) << "\n";
-    }
-    cout << flush;
+    cout << "       ftype: " << header.ftype << endl;
 }
 
 ggml_data_descriptor::ggml_data_descriptor(std::string _name,
