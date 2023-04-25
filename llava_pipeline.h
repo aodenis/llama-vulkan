@@ -12,6 +12,7 @@ public:
     shared_ptr<llava_context> get_context() const;
 
 public:
+    const u32 argcount;
     const weak_ptr<llava_context> w_context;
     const vkr::ShaderModule shaderModule;
     const vkr::DescriptorSetLayout descriptorSetLayout;

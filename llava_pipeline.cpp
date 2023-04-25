@@ -39,7 +39,8 @@ vkr::DescriptorSetLayout createDescriptorSetLayout(const shared_ptr<llava_contex
 
 llava_pipeline::llava_pipeline(const shared_ptr<llava_context>& ctx,
                                const char* shader_source,
-                               uint32_t argument_count) : w_context(ctx),
+                               uint32_t argument_count) : argcount(argument_count),
+                                                          w_context(ctx),
                                                           shaderModule(createShaderModule(ctx, shader_source)),
                                                           descriptorSetLayout(createDescriptorSetLayout(ctx, argument_count)),
                                                           pipelineLayout(*(ctx->get_device()), {{}, 1, &*descriptorSetLayout}),

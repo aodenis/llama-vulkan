@@ -6,11 +6,7 @@
 #include <queue>
 #include <string>
 #include <cassert>
-
-#define GGML_TYPE_F32 0
-#define GGML_TYPE_F16 1
-#define GGML_TYPE_Q4_0 2
-#define GGML_TYPE_Q4_1 3
+#include "types.h"
 
 struct ggml_header {
     int32_t magic;
@@ -31,16 +27,16 @@ struct ggml_token {
 
 class ggml_data_descriptor {
 public:
-    ggml_data_descriptor(std::string name, int32_t ftype, size_t offset, int32_t shape1, int32_t shape2 = 1);
+    ggml_data_descriptor(std::string name, ggml_value_type ftype, size_t offset, int32_t shape1, int32_t shape2 = 1);
     const std::string name;
-    const uint32_t ftype;
+    const ggml_value_type ftype;
     const size_t offset;
     const uint32_t shape1;
     const uint32_t shape2;
     const size_t size;
 
     [[nodiscard]] size_t size_in_file() const;
-    [[nodiscard]] size_t size_for_type(uint32_t ftype) const;
+    [[nodiscard]] size_t size_for_type(ggml_value_type ftype) const;
 };
 
 struct llama_sp_symbol {
@@ -67,6 +63,8 @@ struct llama_sp_bigram {
 
 class ggml_file {
     friend class llava_context;
+    friend class llava_buffer;
+    friend class llava_layer;
 public:
     ggml_file(const char* filepath);
     ~ggml_file();

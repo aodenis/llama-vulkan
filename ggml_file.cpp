@@ -7,6 +7,7 @@
 #include <cassert>
 #include <utility>
 #include "ggml_file.h"
+#include "types.h"
 
 using namespace std;
 
@@ -80,6 +81,7 @@ void ggml_file::read_data() {
     auto n_dims = read_scalar<int32_t>();
     auto name_len = read_scalar<int32_t>();
     auto ftype = read_scalar<int32_t>();
+    assert(ftype <= 3);
     assert(n_dims > 0);
     assert(n_dims < 3);
     auto shape1 = read_scalar<int32_t>();
@@ -97,7 +99,7 @@ void ggml_file::read_data() {
     name.emplace_back(0);
     size_t offset = (cursor - mapping);
     offset = (offset + 31) & (~31UL);
-    auto& new_table = tables.emplace_back(string(name.data()), ftype, offset, shape1, shape2);
+    auto& new_table = tables.emplace_back(string(name.data()), static_cast<ggml_value_type>(ftype), offset, shape1, shape2);
     cursor = mapping + new_table.offset + new_table.size;
 }
 
@@ -124,7 +126,7 @@ void ggml_file::print_info() const {
 }
 
 ggml_data_descriptor::ggml_data_descriptor(std::string _name,
-                                           int32_t _ftype,
+                                           ggml_value_type _ftype,
                                            size_t _offset,
                                            int32_t _shape1,
                                            int32_t _shape2) : name(std::move(_name)),
@@ -137,26 +139,25 @@ ggml_data_descriptor::ggml_data_descriptor(std::string _name,
 }
 
 size_t ggml_data_descriptor::size_in_file() const {
-    if (ftype == GGML_TYPE_F16) {
+    if (ftype == ggml_value_type::f16) {
         return shape1 * shape2 * 2;
     }
-    if (ftype == GGML_TYPE_F32) {
+    if (ftype == ggml_value_type::f32) {
         return shape1 * shape2 * 4;
     }
-    size_t base_size = shape1 * shape2 * ((ftype == GGML_TYPE_Q4_0) ? 20 : 24);
+    size_t base_size = shape1 * shape2 * ((ftype == ggml_value_type::q4_0) ? 20 : 24);
     assert((base_size % 32) == 0);
     return base_size / 32;
 }
 
-size_t ggml_data_descriptor::size_for_type(uint32_t _ftype) const {
-    assert(_ftype <= 3);
-    if (_ftype == GGML_TYPE_F16) {
+size_t ggml_data_descriptor::size_for_type(ggml_value_type _ftype) const {
+    if (_ftype == ggml_value_type::f16) {
         return shape1 * shape2 * 2;
     }
-    if (_ftype == GGML_TYPE_F32) {
+    if (_ftype == ggml_value_type::f32) {
         return shape1 * shape2 * 4;
     }
-    size_t base_size = shape1 * shape2 * ((_ftype == GGML_TYPE_Q4_0) ? 20 : 24);
+    size_t base_size = shape1 * shape2 * ((_ftype == ggml_value_type::q4_0) ? 20 : 24);
     assert((base_size % 32) == 0);
     return base_size / 32;
 }
