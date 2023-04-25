@@ -76,11 +76,6 @@ void ggml_file::read_token() {
     token.score = read_scalar<float>();
 }
 
-#define GGML_TYPE_F32 0
-#define GGML_TYPE_F16 1
-#define GGML_TYPE_Q4_0 2
-#define GGML_TYPE_Q4_1 3
-
 void ggml_file::read_data() {
     auto n_dims = read_scalar<int32_t>();
     auto name_len = read_scalar<int32_t>();

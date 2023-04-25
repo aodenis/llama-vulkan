@@ -4,6 +4,13 @@
 #include <cstdint>
 #include <vector>
 #include <queue>
+#include <string>
+#include <cassert>
+
+#define GGML_TYPE_F32 0
+#define GGML_TYPE_F16 1
+#define GGML_TYPE_Q4_0 2
+#define GGML_TYPE_Q4_1 3
 
 struct ggml_header {
     int32_t magic;
@@ -24,7 +31,7 @@ struct ggml_token {
 
 class ggml_data_descriptor {
 public:
-    ggml_data_descriptor(std::string  name, int32_t ftype, size_t offset, int32_t shape1, int32_t shape2 = 1);
+    ggml_data_descriptor(std::string name, int32_t ftype, size_t offset, int32_t shape1, int32_t shape2 = 1);
     const std::string name;
     const uint32_t ftype;
     const size_t offset;
