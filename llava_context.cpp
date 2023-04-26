@@ -42,6 +42,9 @@ int llava_context::run(int argc, char **argv) try {
     physicalDevice = make_shared<vkr::PhysicalDevice>(get_physical_device());
     uint32_t queueFamilyIndex = get_queue_family_index();
 
+    vk::PhysicalDeviceProperties props = (*physicalDevice).getProperties();
+    cout << "Selected device: " << props.deviceName << endl;
+
     // create a Device
     float queuePriority = 0.0f;
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo(vk::DeviceQueueCreateFlags(), queueFamilyIndex, 1, &queuePriority);
