@@ -54,7 +54,6 @@ public:
     bool allocate_buffers = true;
     specialization_variables_t specialization_variables{};
     u32 mainMemoryTypeIndex = 3;
-    u32 backupMemoryTypeIndex = 3;
 
 public: // various methods
     vk::Event normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events);
@@ -111,11 +110,12 @@ private: // buffers
 
 private:
     bool use_prebuilt_shaders = false;
-    u32 vulkan_target_version = 12;
 
 private:
     map<string, llava_pipeline> named_pipelines;
     void reset_command_buffer_events();
+    u32 find_suitable_memory_type(const vk::PhysicalDevice &_physical_device);
+    u32 find_suitable_queue_index();
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H

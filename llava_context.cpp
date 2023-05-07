@@ -8,6 +8,8 @@
 #include <vulkan/vulkan.hpp>
 #include "ggml_file.h"
 #include <cmath>
+#include <set>
+
 #ifdef RUNTIME_BUILD_ENABLED
 #include <glslang/Public/ShaderLang.h>
 #endif
@@ -20,11 +22,29 @@ struct shared_state {
 };
 
 vk::PhysicalDevice llava_context::get_physical_device() {
-    for(vk::PhysicalDevice const &pd : vulkan_instance.enumeratePhysicalDevices()) {
-        if (pd.getProperties().deviceType == vk::PhysicalDeviceType::eIntegratedGpu)
-            return pd;
+    auto physical_devices = vulkan_instance.enumeratePhysicalDevices();
+    for (vk::PhysicalDevice const &pd : physical_devices) {
+        if (pd.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+            if (find_suitable_memory_type(pd) != (~0U)) {
+                return pd;
+            } else if (verbosity > 0) {
+                cout << "[*] Not using GPU " << pd.getProperties().deviceName << " as it does not meet memory requirements" << endl;
+            }
+        }
     }
-    assert(false);
+
+    for (vk::PhysicalDevice const &pd : physical_devices) {
+        if (pd.getProperties().deviceType == vk::PhysicalDeviceType::eIntegratedGpu) {
+            if (find_suitable_memory_type(pd) != (~0U)) {
+                return pd;
+            } else if (verbosity > 0) {
+                cout << "[*] Not using GPU " << pd.getProperties().deviceName << " as it does not meet memory requirements" << endl;
+            }
+        }
+    }
+
+    cerr << "[!] Cannot find suitable GPU" << endl;
+    exit(1);
 }
 
 uint32_t llava_context::get_queue_family_index() const {
@@ -90,6 +110,50 @@ u32 ulog2(u32 n) {
     return i;
 }
 
+u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical_device) {
+    auto memory_properties = _physical_device.getMemoryProperties();
+    set<u32> accepted_memory_heaps;
+    for(u32 i = 0; i < memory_properties.memoryHeapCount; i++) {
+        if (memory_properties.memoryHeaps.at(i).size > model->mapping_size) {
+            accepted_memory_heaps.insert(i);
+        }
+    }
+    auto wanted_flags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    list<u32> device_not_local_types;
+    for(u32 i = 0; i < memory_properties.memoryTypeCount; ++i) {
+        auto& memType = memory_properties.memoryTypes.at(i);
+        if (not accepted_memory_heaps.contains(memType.heapIndex)) {
+            continue;
+        }
+
+        if ((memType.propertyFlags & wanted_flags) != wanted_flags) {
+            continue;
+        }
+
+        if (memType.propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) {
+            return i;
+        } else {
+            device_not_local_types.push_back(i);
+        }
+    }
+
+    if (not device_not_local_types.empty()) {
+        return device_not_local_types.front();
+    }
+
+    return ~0U;
+}
+
+u32 llava_context::find_suitable_queue_index() {
+    vector<vk::QueueFamilyProperties> queueFamilyProperties = physical_device.getQueueFamilyProperties();
+    for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+        if (queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) {
+            return i;
+        }
+    }
+    return ~0U;
+}
+
 int llava_context::run(int argc, char **argv) {
 #ifndef RUNTIME_BUILD_ENABLED
     use_prebuilt_shaders = true;
@@ -101,10 +165,7 @@ int llava_context::run(int argc, char **argv) {
     string prompt = "The ten best monuments to see in Paris are";
 
     for (u32 i = 1; i < argc; ++i) {
-        if (string(argv[i]) == "--dell") {
-            backupMemoryTypeIndex = 0;
-            mainMemoryTypeIndex = 0;
-        } else if (string(argv[i]) == "--use-prebuilt") {
+        if (string(argv[i]) == "--use-prebuilt") {
             use_prebuilt_shaders = true;
         } else if (string(argv[i]) == "--debug") {
             debug_mode = true;
@@ -122,7 +183,7 @@ int llava_context::run(int argc, char **argv) {
             ++i;
             model_path = argv[i];
         } else if (string(argv[i]) == "--help" or string(argv[i]) == "-h") {
-            cout << (argc ? argv[0] : "./llama_vulkan") << " [-h] [--dell] [-m model_name.bin] [prompt]" << endl;
+            cout << (argc ? argv[0] : "./llama_vulkan") << " [-h] [-m model_name.bin] [prompt]" << endl;
             exit(0);
         } else if (string(argv[i]) == "--verbose" or string(argv[i]) == "-v") {
             verbosity++;
@@ -173,21 +234,21 @@ int llava_context::run(int argc, char **argv) {
     vulkan_instance = vk::createInstance({{}, &applicationInfo, enabled_layers});
     physical_device = get_physical_device();
 
-    {
-        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physical_device.getQueueFamilyProperties();
-        // Compute queue family index
-        for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
-            if (queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) {
-                queueFamilyIndex = i;
-                break;
-            }
-        }
+    queueFamilyIndex = find_suitable_queue_index();
+    if (!~queueFamilyIndex) {
+        cerr << "[!] No compute queue family found on selected device" << endl;
+        return 1;
     }
-    assert(~queueFamilyIndex);
+
+    mainMemoryTypeIndex = find_suitable_memory_type(physical_device);
+    if (!~mainMemoryTypeIndex) {
+        cerr << "[!] No suitable memory type found on selected device" << endl;
+        return 1;
+    }
 
     this->workgroup_size = physical_device.getProperties().limits.maxComputeWorkGroupInvocations;
     ulog2(this->workgroup_size); // Assert it is a pow2
-    if (verbosity > 0) {
+    if (verbosity) {
         cout << "Selected device: " << physical_device.getProperties().deviceName << endl;
     }
 

@@ -53,9 +53,6 @@ llava_buffer::llava_buffer(llava_context* _context, ggml_data_descriptor const& 
         vk::Buffer QBuffer = context->get_device().createBuffer({{}, (buffer_size/20)*16, wantedBits});
         buffers.emplace_back(DBuffer);
         buffers.emplace_back(QBuffer);
-        if (ends_with(backing_name, "w1") or ends_with(backing_name, "w3")) {
-            memory_type = context->backupMemoryTypeIndex;
-        }
     } else if (type == ggml_value_type::f32) {
         uint32_t element_count = shape.second * shape.first;
         element_count = (element_count + 1023) & ~1023U;
