@@ -166,7 +166,7 @@ static TBuiltInResource default_resources(llava_context* ctx)
             .maxTaskWorkGroupSizeZ_NV                  = 1,
             .maxMeshViewCountNV                        = 4,
             .limits = {
-                    .nonInductiveForLoops                 = true,
+                    .nonInductiveForLoops                 = false,
                     .whileLoops                           = false,
                     .doWhileLoops                         = false,
                     .generalUniformIndexing               = true,

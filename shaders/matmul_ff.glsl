@@ -1,6 +1,7 @@
 #version 450
 
 #extension GL_GOOGLE_include_directive:enable
+#extension GL_EXT_debug_printf:enable
 
 #define MATMUL_Q4_BLOCKS_PER_ROW MATMUL_FF_Q4_BLOCKS_PER_ROW
 #define MATMUL_Q4_BLOCK_COUNT_PER_WORKER MATMUL_FF_Q4_BLOCK_COUNT_PER_WORKER

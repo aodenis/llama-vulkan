@@ -36,8 +36,7 @@ void main()
     const uint i = gl_GlobalInvocationID.x;
 
     float mean_part = 0;
-    #pragma unroll managed_count
-    for (int j = 0; j < managed_count; j++) {
+    [[unroll]] for (int j = 0; j < managed_count; j++) {
         vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
         mean_part += dot(element, vec4(1.));
     }
@@ -45,8 +44,7 @@ void main()
     const float mean = local_sum(0, i, mean_part) / DIM;
     mean_part = 0;
 
-    #pragma unroll managed_count
-    for (int j = 0; j < managed_count; j++) {
+    [[unroll]] for (int j = 0; j < managed_count; j++) {
         vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
         element = ((managed_count * i + j) < DIM) ? (element - vec4(mean)) : vec4(0.);
         mean_part += dot(element, element);
@@ -54,8 +52,7 @@ void main()
 
     mean_part = inversesqrt(local_sum(0, i, mean_part) / DIM);
 
-    #pragma unroll managed_count
-    for (int j = 0; j < managed_count; j++) {
+    [[unroll]] for (int j = 0; j < managed_count; j++) {
         vec4 element = inp.values[min((managed_count * i + j), DIM - 1)] * weights.values[min((managed_count * i + j), DIM - 1)];
         if (managed_count * i + j < DIM) {
             outp.values[managed_count * i + j] = element * mean_part;

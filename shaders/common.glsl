@@ -1,3 +1,5 @@
+#extension GL_EXT_control_flow_attributes:enable
+
 #ifdef USE_SPEVAR
 
 layout (constant_id = 0) const uint HEAD_COUNT = 32;
@@ -57,8 +59,7 @@ float local_sum(const uint subgroup_id, const uint self_id, const float element)
     sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + self_id] = element;
     barrier();
     uint curmax = (1 << LOCAL_SUM_BITS);
-    #pragma unroll LOCAL_SUM_BITS
-    for (int j = 0; j < LOCAL_SUM_BITS; j++) {
+    [[unroll]] for (int j = 0; j < LOCAL_SUM_BITS; j++) {
         curmax >>= 1;
         if (self_id < curmax) {
             sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + self_id] += sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + curmax + self_id];

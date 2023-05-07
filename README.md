@@ -14,7 +14,7 @@ Vulkan 1.2 is used and no extension is required.
 * Basic evaluation of the 7B model
 
 ## TODO
-* Support for memory swapping and dynamic memory types finding
+* Support for memory swapping
 * Faster initialization
 * Proper interface
 * Support for more models

@@ -50,8 +50,8 @@ llava_command::llava_command(llava_pipeline *pipeline,
         if (not is_mutating_buffer) {
             continue;
         }
-        auto dstAccessMask = (i == out_buffer_id) ? vk::AccessFlagBits::eMemoryWrite : vk::AccessFlagBits::eMemoryRead;
-        barriers.emplace_back(vk::AccessFlagBits::eMemoryWrite, dstAccessMask, context->get_queue_family_index(), context->get_queue_family_index(), x, 0, VK_WHOLE_SIZE);
+        auto dstAccessMask = (i == out_buffer_id) ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eShaderRead;
+        barriers.emplace_back(vk::AccessFlagBits::eShaderWrite, dstAccessMask, context->get_queue_family_index(), context->get_queue_family_index(), x, 0, VK_WHOLE_SIZE);
     }
     commandBuffer.begin(vk::CommandBufferBeginInfo());
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);

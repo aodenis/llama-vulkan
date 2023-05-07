@@ -1,6 +1,6 @@
 #!/bin/bash
 
-mkdir prebuilt_shaders
+mkdir -p prebuilt_shaders
 rm -f prebuilt_shaders/*.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/add_logits.glsl -o prebuilt_shaders/add_logits.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/copy_to_cache.glsl -o prebuilt_shaders/copy_to_cache.spv

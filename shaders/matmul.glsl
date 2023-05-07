@@ -19,7 +19,7 @@ layout (binding = 2) buffer readonly MatrixQBuffer {
 } matq;
 
 layout (binding = 3) buffer readonly InFBuffer {
-    vec2 values[][4][4];
+    vec4 values[][4][2];
 } inp;
 
 
@@ -36,24 +36,18 @@ void main()
     const uint row_worker_id = gl_GlobalInvocationID.y;
 
     float worker_sum = 0;
-    #pragma unroll
-    for (int t = 0; t < MATMUL_Q4_BLOCK_COUNT_PER_WORKER; t++) {
+    [[unroll]] for (int t = 0; t < MATMUL_Q4_BLOCK_COUNT_PER_WORKER; t++) {
         float block_mat_value = 0;
         uint block_id = MATMUL_Q4_BLOCK_COUNT_PER_WORKER * row_worker_id + t;
         const bool skipped = (block_id >= MATMUL_Q4_BLOCKS_PER_ROW);
         block_id = min(block_id, MATMUL_Q4_BLOCKS_PER_ROW - 1);
-        #pragma unroll 4
-        for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
-            int b_base = matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
-            #pragma unroll 4
-            for (int block_byte_id = 0; block_byte_id < 4; block_byte_id++) {
-                vec2 v1 = inp.values[block_id][block_block_id][block_byte_id];
-                ivec2 v2 = ivec2(b_base, b_base >> 4);
-                v2 &= 0xf;
-                v2 -= 8;
-                block_mat_value += dot(vec2(v2), v1);
-                b_base >>= 8;
-            }
+
+        [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
+            ivec4 v2 = ivec4(matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id]);
+            v2 >>= ivec4(0, 4, 8, 12);
+            block_mat_value += dot(vec4((v2 & 0xf) - 8), inp.values[block_id][block_block_id][0]);
+            v2 >>= 16;
+            block_mat_value += dot(vec4((v2 & 0xf) - 8), inp.values[block_id][block_block_id][1]);
         }
         worker_sum += block_mat_value * (skipped ? 0. : matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id]);
     }
