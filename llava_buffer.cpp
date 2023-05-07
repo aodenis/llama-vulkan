@@ -160,16 +160,22 @@ void llava_buffer::allocate() {
         context->get_device().bindBufferMemory(buffers.front(), deviceMemory, 0);
         context->get_device().bindBufferMemory(buffers.back(), deviceMemory, buffer_size/5);
 
+        u32 column_count = shape.second;
+
         auto* d_data = static_cast<uint32_t *>(context->get_device().mapMemory(deviceMemory, 0, table.size));
         uint32_t* q_data = d_data + (buffer_size/20);
         uint32_t* raw_data = reinterpret_cast<uint32_t *>(context->get_model()->mapping + table.offset);
         size_t block_count = buffer_size/20;
         for (size_t i = 0; i < block_count; ++i) {
-            d_data[i] = raw_data[5 * i];
-            q_data[4 * i    ] = raw_data[5 * i + 1];
-            q_data[4 * i + 1] = raw_data[5 * i + 2];
-            q_data[4 * i + 2] = raw_data[5 * i + 3];
-            q_data[4 * i + 3] = raw_data[5 * i + 4];
+            uint32_t row_id = i / (column_count / 32);
+            uint32_t column_id = i % (column_count / 32);
+            u32 fpid = row_id >> 2;
+            u32 fpsid = row_id & 3;
+            d_data[fpid * 4 * (column_count / 32) + 4 * column_id + fpsid] = raw_data[5 * i];
+
+            for(u32 sub_block_id = 0; sub_block_id < 4; sub_block_id ++) {
+                q_data[fpid * 4 * (column_count / 32) * 4 + 4 * 4 * column_id + 4 * sub_block_id + fpsid] = raw_data[5 * i + 1 + sub_block_id];
+            }
         }
         context->get_device().unmapMemory(deviceMemory);
     } else if (type == ggml_value_type::f32) {

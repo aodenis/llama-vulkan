@@ -467,11 +467,11 @@ vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llav
     assert(outbuf->shape.second == 1);
 
     if (inbuf->shape.first == model->header.dim) {
-        assert(outbuf->shape.first % specialization_variables.matmul_dim_row_per_wavefront == 0);
-        return record_command("matmul_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / specialization_variables.matmul_dim_row_per_wavefront);
+        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
+        return record_command("matmul_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
     } else if (inbuf->shape.first == model->ff_size) {
-        assert(outbuf->shape.first % specialization_variables.matmul_ff_row_per_wavefront == 0);
-        return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / specialization_variables.matmul_ff_row_per_wavefront);
+        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
+        return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
     } else {
         cout << "MATMUL " << matrix->shape.first << "," << matrix->shape.second << " " << ftype_name(outbuf->type) << " " << ftype_name(matrix->type) << " " << ftype_name(inbuf->type) << endl;
         return nullptr;
@@ -485,8 +485,8 @@ vk::Event llava_context::matmul_silu_ff(llava_buffer* outbuf, llava_buffer* w3_m
     assert(inbuf->shape.first == model->header.dim);
     assert(outbuf->shape.first == model->ff_size);
 
-    assert(outbuf->shape.first % specialization_variables.matmul_dim_row_per_wavefront == 0);
-    return record_command("matmul_silu_ff", {outbuf, w3_matrix, w1_matrix, inbuf}, events, outbuf->shape.first / specialization_variables.matmul_dim_row_per_wavefront);
+    assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
+    return record_command("matmul_silu_ff", {outbuf, w3_matrix, w1_matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
 }
 
 vk::Event llava_context::kv_copy(llava_buffer* out_cache, llava_buffer* input_line, initializer_list<vk::Event> events) {

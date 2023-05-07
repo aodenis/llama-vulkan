@@ -3,19 +3,20 @@
 #endif
 
 #define LOCAL_SUM_BITS MATMUL_ROW_WORKER_COUNT_LOG2
+#define LOCAL_SUM_VEC4
 
 #include "common.glsl"
 
 layout (binding = 0) buffer OutBuffer {
-    float values[];
+    vec4 values[];
 } outp;
 
 layout (binding = 1) buffer readonly MatrixDBuffer {
-    float values[];
+    vec4 values[];
 } matd;
 
 layout (binding = 2) buffer readonly MatrixQBuffer {
-    int values[][4];
+    ivec4 values[][4];
 } matq;
 
 layout (binding = 3) buffer readonly InFBuffer {
@@ -33,27 +34,28 @@ void main()
 {
     const uint row_id = gl_GlobalInvocationID.x;
     const uint local_row_id = gl_LocalInvocationID.x;
-    const uint row_worker_id = gl_GlobalInvocationID.y;
+    const uint worker_id = gl_GlobalInvocationID.y;
 
-    float worker_sum = 0;
+    vec4 worker_sum = vec4(0);
     [[unroll]] for (int t = 0; t < MATMUL_Q4_BLOCK_COUNT_PER_WORKER; t++) {
-        float block_mat_value = 0;
-        uint block_id = MATMUL_Q4_BLOCK_COUNT_PER_WORKER * row_worker_id + t;
-        const bool skipped = (block_id >= MATMUL_Q4_BLOCKS_PER_ROW);
-        block_id = min(block_id, MATMUL_Q4_BLOCKS_PER_ROW - 1);
+        vec4 block_mat_value = vec4(0.);
+        uint block_id = min(MATMUL_Q4_BLOCK_COUNT_PER_WORKER * worker_id + t, MATMUL_Q4_BLOCKS_PER_ROW - 1);
 
         [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
-            ivec4 v2 = ivec4(matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id]);
-            v2 >>= ivec4(0, 4, 8, 12);
-            block_mat_value += dot(vec4((v2 & 0xf) - 8), inp.values[block_id][block_block_id][0]);
-            v2 >>= 16;
-            block_mat_value += dot(vec4((v2 & 0xf) - 8), inp.values[block_id][block_block_id][1]);
+            ivec4 sub_block = matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
+            mat4 m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
+            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][0];
+            sub_block >>= 16;
+            m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
+            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][1];
         }
-        worker_sum += block_mat_value * (skipped ? 0. : matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id]);
+        if (MATMUL_Q4_BLOCK_COUNT_PER_WORKER * worker_id + t < MATMUL_Q4_BLOCKS_PER_ROW) {
+            worker_sum += block_mat_value * matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id];
+        }
     }
 
-    const float result = local_sum(local_row_id, row_worker_id, worker_sum);
-    if (row_worker_id == 0) {
+    const vec4 result = local_sum(local_row_id, worker_id, worker_sum);
+    if (worker_id == 0) {
         outp.values[row_id] = result;
     }
 }

@@ -54,6 +54,7 @@ layout (constant_id = 19) const uint MATMUL_FF_Q4_BLOCKS_PER_ROW = 344;
 
 #ifdef LOCAL_SUM_BITS
 
+#ifndef LOCAL_SUM_VEC4
 shared float sum_buffer[MAX_WGS];
 float local_sum(const uint subgroup_id, const uint self_id, const float element) {
     sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + self_id] = element;
@@ -68,5 +69,21 @@ float local_sum(const uint subgroup_id, const uint self_id, const float element)
     }
     return sum_buffer[subgroup_id << LOCAL_SUM_BITS];
 }
+#else
+shared vec4 sum_buffer[MAX_WGS];
+vec4 local_sum(const uint subgroup_id, const uint self_id, const vec4 element) {
+    sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + self_id] = element;
+    barrier();
+    uint curmax = (1 << LOCAL_SUM_BITS);
+    [[unroll]] for (int j = 0; j < LOCAL_SUM_BITS; j++) {
+        curmax >>= 1;
+        if (self_id < curmax) {
+            sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + self_id] += sum_buffer[(subgroup_id << LOCAL_SUM_BITS) + curmax + self_id];
+        }
+        barrier();
+    }
+    return sum_buffer[subgroup_id << LOCAL_SUM_BITS];
+}
+#endif
 
 #endif
