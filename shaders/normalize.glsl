@@ -1,0 +1,64 @@
+#version 450
+
+#extension GL_GOOGLE_include_directive:enable
+
+#define LOCAL_SUM_BITS MAX_WGS_BITS
+
+#include "common.glsl"
+
+layout (binding = 0) buffer OutBuffer {
+    vec4 values[DIM / 4];
+} outp;
+
+layout (binding = 1) buffer readonly InBuffer {
+    vec4 values[DIM / 4];
+} inp;
+
+layout (binding = 2) buffer readonly WeightBuffer {
+    vec4 values[DIM / 4];
+} weights;
+
+#ifdef USE_SPEVAR
+
+layout (local_size_x_id = MAX_WGS_CID, local_size_y = 1, local_size_z = 1) in;
+const uint managed_count = ((DIM/4) + MAX_WGS - 1) / MAX_WGS;
+
+#else
+
+layout (local_size_x = MAX_WGS, local_size_y = 1, local_size_z = 1) in;
+#define managed_count (((DIM/4) + MAX_WGS - 1) / MAX_WGS)
+
+#endif
+
+
+void main()
+{
+    const uint i = gl_GlobalInvocationID.x;
+
+    float mean_part = 0;
+    #pragma unroll managed_count
+    for (int j = 0; j < managed_count; j++) {
+        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
+        mean_part += dot(element, vec4(1.));
+    }
+
+    const float mean = local_sum(0, i, mean_part) / DIM;
+    mean_part = 0;
+
+    #pragma unroll managed_count
+    for (int j = 0; j < managed_count; j++) {
+        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
+        element = ((managed_count * i + j) < DIM) ? (element - vec4(mean)) : vec4(0.);
+        mean_part += dot(element, element);
+    }
+
+    mean_part = inversesqrt(local_sum(0, i, mean_part) / DIM);
+
+    #pragma unroll managed_count
+    for (int j = 0; j < managed_count; j++) {
+        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)] * weights.values[min((managed_count * i + j), DIM - 1)];
+        if (managed_count * i + j < DIM) {
+            outp.values[managed_count * i + j] = element * mean_part;
+        }
+    }
+}

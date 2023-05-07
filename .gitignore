@@ -1,0 +1,10 @@
+cmake-build-debug
+.idea
+.vscode
+*.spirv
+*.spv
+notes.txt
+
+sdk
+build
+prebuilt_shaders
