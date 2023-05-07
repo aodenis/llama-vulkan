@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.22)
 project(vulkan_llama)
 
 find_package(Vulkan REQUIRED)
@@ -18,5 +18,5 @@ else ()
     target_link_libraries(vulkan_llama PRIVATE ${Vulkan_LIBRARIES})
 endif ()
 
-add_link_options(-fsanitizer=address)
-add_compile_options(-fsanitizer=address)
+# add_link_options(-fsanitizer=address)
+# add_compile_options(-fsanitizer=address)

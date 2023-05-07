@@ -1,12 +1,15 @@
-Llama for Vulkan's compute pipelines
+# vulkan-llama
 
-### Working
+LLM evaluator based on Vulkan
+
+This project is mostly based on [Georgi Gerganov's llama.cpp](https://github.com/ggerganov/llama.cpp).
+
+## Working
 * Tokenizer
-* GGML parsing and mapping
-* Vulkan initialization
+* GGML parsing and mapping for q4_0 models
 * Basic evaluation of the 7G model
 
-### TODO
+## TODO
 * Support for memory swapping and dynamic memory types
 * Faster initialization
 * Proper interface
@@ -16,19 +19,16 @@ Llama for Vulkan's compute pipelines
 
 ## Setup
 
-```
-cmake --no-warn-unused-cli -DCMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE -DCMAKE_BUILD_TYPE:STRING=Debug -DCMAKE_C_COMPILER:FILEPATH=/usr/bin/gcc -DCMAKE_CXX_COMPILER:FILEPATH=/usr/bin/g++ -B build -G Ninja
-```
-
 Building prebuilt shaders:
-```
-glslc -fshader-stage=comp shaders/add_f32_1024.glsl -o prebuilt_shaders/add_f32_1024.spv
+```bash
+./prebuild_shaders.sh
 ```
 
 
 ## Build
 
-```
-cmake --build build --config Debug --target all
-build/vulkan_llama
+```bash
+mkdir build && cd build
+cmake .. && make -j
+cd .. && ./build/vulkan_llama --help
 ```

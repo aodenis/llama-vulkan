@@ -171,6 +171,7 @@ size_t ggml_data_descriptor::size_for_type(ggml_value_type _ftype) const {
     return base_size / 32;
 }
 
+// The following function were copied from llama.cpp source
 void ggml_file::try_add_bigram(int left, int right) {
     if ((left == -1) or (right == -1)) {
         return;
