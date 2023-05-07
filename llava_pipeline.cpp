@@ -66,8 +66,12 @@ private:
     const string _const_val;
 };
 
-static TBuiltInResource default_resources()
+static TBuiltInResource default_resources(llava_context* ctx)
 {
+    vk::PhysicalDevice& physical_device = ctx->get_physical_device();
+    vk::PhysicalDeviceProperties props = physical_device.getProperties();
+    auto& limits = props.limits;
+
     return {
             .maxLights                                 = 32,
             .maxClipPlanes                             = 6,
@@ -88,23 +92,23 @@ static TBuiltInResource default_resources()
             .maxFragmentInputVectors                   = 15,
             .minProgramTexelOffset                     = -8,
             .maxProgramTexelOffset                     = 7,
-            .maxClipDistances                          = 8,
-            .maxComputeWorkGroupCountX                 = 65535,
-            .maxComputeWorkGroupCountY                 = 65535,
-            .maxComputeWorkGroupCountZ                 = 65535,
-            .maxComputeWorkGroupSizeX                  = 1024,
-            .maxComputeWorkGroupSizeY                  = 1024,
-            .maxComputeWorkGroupSizeZ                  = 64,
+            .maxClipDistances                          = static_cast<int>(limits.maxClipDistances),
+            .maxComputeWorkGroupCountX                 = static_cast<int>(limits.maxComputeWorkGroupCount.at(0)),
+            .maxComputeWorkGroupCountY                 = static_cast<int>(limits.maxComputeWorkGroupCount.at(1)),
+            .maxComputeWorkGroupCountZ                 = static_cast<int>(limits.maxComputeWorkGroupCount.at(2)),
+            .maxComputeWorkGroupSizeX                  = static_cast<int>(limits.maxComputeWorkGroupSize.at(0)),
+            .maxComputeWorkGroupSizeY                  = static_cast<int>(limits.maxComputeWorkGroupSize.at(1)),
+            .maxComputeWorkGroupSizeZ                  = static_cast<int>(limits.maxComputeWorkGroupSize.at(2)),
             .maxComputeUniformComponents               = 1024,
             .maxComputeTextureImageUnits               = 16,
             .maxComputeImageUniforms                   = 8,
             .maxComputeAtomicCounters                  = 8,
             .maxComputeAtomicCounterBuffers            = 1,
             .maxVaryingComponents                      = 60,
-            .maxVertexOutputComponents                 = 64,
-            .maxGeometryInputComponents                = 64,
-            .maxGeometryOutputComponents               = 128,
-            .maxFragmentInputComponents                = 128,
+            .maxVertexOutputComponents                 = static_cast<int>(limits.maxVertexOutputComponents), // 64,
+            .maxGeometryInputComponents                = static_cast<int>(limits.maxGeometryInputComponents), // 64,
+            .maxGeometryOutputComponents               = static_cast<int>(limits.maxGeometryOutputComponents), // 128,
+            .maxFragmentInputComponents                = static_cast<int>(limits.maxFragmentInputComponents), // 128,
             .maxImageUnits                             = 8,
             .maxCombinedImageUnitsAndFragmentOutputs   = 8,
             .maxCombinedShaderOutputResources          = 8,
@@ -116,8 +120,8 @@ static TBuiltInResource default_resources()
             .maxFragmentImageUniforms                  = 8,
             .maxCombinedImageUniforms                  = 8,
             .maxGeometryTextureImageUnits              = 16,
-            .maxGeometryOutputVertices                 = 256,
-            .maxGeometryTotalOutputComponents          = 1024,
+            .maxGeometryOutputVertices                 = static_cast<int>(limits.maxGeometryOutputVertices), // 256,
+            .maxGeometryTotalOutputComponents          = static_cast<int>(limits.maxGeometryTotalOutputComponents), // 1024,
             .maxGeometryUniformComponents              = 1024,
             .maxGeometryVaryingComponents              = 64,
             .maxTessControlInputComponents             = 128,
@@ -132,7 +136,7 @@ static TBuiltInResource default_resources()
             .maxTessPatchComponents                    = 120,
             .maxPatchVertices                          = 32,
             .maxTessGenLevel                           = 64,
-            .maxViewports                              = 16,
+            .maxViewports                              = static_cast<int>(limits.maxViewports), // 16,
             .maxVertexAtomicCounters                   = 0,
             .maxTessControlAtomicCounters              = 0,
             .maxTessEvaluationAtomicCounters           = 0,
@@ -149,8 +153,8 @@ static TBuiltInResource default_resources()
             .maxAtomicCounterBufferSize                = 16384,
             .maxTransformFeedbackBuffers               = 4,
             .maxTransformFeedbackInterleavedComponents = 64,
-            .maxCullDistances                          = 8,
-            .maxCombinedClipAndCullDistances           = 8,
+            .maxCullDistances                          = static_cast<int>(limits.maxCullDistances), // 8,
+            .maxCombinedClipAndCullDistances           = static_cast<int>(limits.maxCombinedClipAndCullDistances), // 8,
             .maxSamples                                = 4,
             .maxMeshOutputVerticesNV                   = 256,
             .maxMeshOutputPrimitivesNV                 = 512,
@@ -232,7 +236,7 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_4);
 
         CustomIncluder includer(ctx->generate_spevar_define_string());
-        TBuiltInResource resources = default_resources();
+        TBuiltInResource resources = default_resources(ctx);
 
         auto messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
         string preprocessedSource;

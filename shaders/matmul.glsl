@@ -58,5 +58,8 @@ void main()
         worker_sum += block_mat_value * (skipped ? 0. : matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id]);
     }
 
-    outp.values[row_id] = local_sum(local_row_id, row_worker_id, worker_sum);
+    const float result = local_sum(local_row_id, row_worker_id, worker_sum);
+    if (row_worker_id == 0) {
+        outp.values[row_id] = result;
+    }
 }

@@ -8,8 +8,7 @@ glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/kqv_matching.glsl -o prebuilt_s
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_ff.glsl -o prebuilt_shaders/matmul_ff.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_dim.glsl -o prebuilt_shaders/matmul_dim.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/mhsa.glsl -o prebuilt_shaders/mhsa.spv
-glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/multiply.glsl -o prebuilt_shaders/multiply.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/normalize.glsl -o prebuilt_shaders/normalize.spv
-glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/silu.glsl -o prebuilt_shaders/silu.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/rope.glsl -o prebuilt_shaders/rope.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/softmax.glsl -o prebuilt_shaders/softmax.spv
+glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_silu_ff.glsl -o prebuilt_shaders/matmul_silu_ff.spv

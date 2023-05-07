@@ -21,7 +21,7 @@ struct shared_state {
     u32 pad2;
 };
 
-vk::PhysicalDevice llava_context::get_physical_device() {
+vk::PhysicalDevice llava_context::find_suitable_physical_device() {
     auto physical_devices = vulkan_instance.enumeratePhysicalDevices();
     for (vk::PhysicalDevice const &pd : physical_devices) {
         if (pd.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
@@ -49,6 +49,10 @@ vk::PhysicalDevice llava_context::get_physical_device() {
 
 uint32_t llava_context::get_queue_family_index() const {
     return queueFamilyIndex;
+}
+
+vk::PhysicalDevice& llava_context::get_physical_device() {
+    return physical_device;
 }
 
 llava_context::~llava_context() {
@@ -232,7 +236,7 @@ int llava_context::run(int argc, char **argv) {
 
     // create an Instance
     vulkan_instance = vk::createInstance({{}, &applicationInfo, enabled_layers});
-    physical_device = get_physical_device();
+    physical_device = find_suitable_physical_device();
 
     queueFamilyIndex = find_suitable_queue_index();
     if (!~queueFamilyIndex) {
@@ -456,12 +460,6 @@ vk::Event llava_context::normalize_logit(llava_buffer* outbuf, llava_buffer* inb
     return record_command("normalize", {outbuf, inbuf, weights}, events, 1);
 }
 
-vk::Event llava_context::row_wise_multiply(llava_buffer* buf, llava_buffer* weights, initializer_list<vk::Event> events) {
-    assert(buf->shape == weights->shape);
-    assert(buf->shape.second == 1);
-    return record_command("multiply", {buf, weights}, events, updiv(weights->shape.first, workgroup_size));
-}
-
 vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
     assert(inbuf->shape.first == matrix->shape.second);
     assert(outbuf->shape.first == matrix->shape.first);
@@ -478,6 +476,17 @@ vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llav
         cout << "MATMUL " << matrix->shape.first << "," << matrix->shape.second << " " << ftype_name(outbuf->type) << " " << ftype_name(matrix->type) << " " << ftype_name(inbuf->type) << endl;
         return nullptr;
     }
+}
+
+vk::Event llava_context::matmul_silu_ff(llava_buffer* outbuf, llava_buffer* w3_matrix, llava_buffer* w1_matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
+    assert(w3_matrix->shape == w1_matrix->shape);
+    assert(inbuf->shape.second == 1);
+    assert(outbuf->shape.second == 1);
+    assert(inbuf->shape.first == model->header.dim);
+    assert(outbuf->shape.first == model->ff_size);
+
+    assert(outbuf->shape.first % specialization_variables.matmul_dim_row_per_wavefront == 0);
+    return record_command("matmul_silu_ff", {outbuf, w3_matrix, w1_matrix, inbuf}, events, outbuf->shape.first / specialization_variables.matmul_dim_row_per_wavefront);
 }
 
 vk::Event llava_context::kv_copy(llava_buffer* out_cache, llava_buffer* input_line, initializer_list<vk::Event> events) {
@@ -512,10 +521,6 @@ vk::Event llava_context::inplace_softmax(llava_buffer* inout_buffer, initializer
 
 vk::Event llava_context::add(llava_buffer* buf, llava_buffer* delta_buf, initializer_list<vk::Event> events) {
     return record_command("add_logits", {buf, delta_buf}, events, updiv(model->header.dim, workgroup_size));
-}
-
-vk::Event llava_context::silu(llava_buffer* buf, initializer_list<vk::Event> events) {
-    return record_command("silu", {buf}, events, updiv(buf->shape.first, workgroup_size));
 }
 
 vk::Event llava_context::rope(llava_buffer* buf, initializer_list<vk::Event> events) {

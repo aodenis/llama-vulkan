@@ -48,6 +48,8 @@ public:
     vk::CommandPool& get_command_pool();
     vk::DescriptorPool& get_descriptor_pool();
     vk::PipelineCache& get_pipeline_cache();
+    vk::PhysicalDevice& get_physical_device();
+    [[nodiscard]] uint32_t get_queue_family_index() const;
     shared_ptr<ggml_file> get_model();
     u32 backlog_size = 128;
     u32 workgroup_size = 1024;
@@ -57,15 +59,14 @@ public:
 
 public: // various methods
     vk::Event normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events);
-    vk::Event row_wise_multiply(llava_buffer* buf, llava_buffer* weights, initializer_list<vk::Event> events);
     vk::Event matmul(llava_buffer* outbuf, llava_buffer*, llava_buffer*, initializer_list<vk::Event> events);
     vk::Event kv_copy(llava_buffer*, llava_buffer*, initializer_list<vk::Event> events);
     vk::Event multi_head_attention(llava_buffer* attn_out, llava_buffer* k_cache, llava_buffer* query, initializer_list<vk::Event> events);
     vk::Event perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out, initializer_list<vk::Event> events);
     vk::Event inplace_softmax(llava_buffer*, initializer_list<vk::Event> events);
     vk::Event add(llava_buffer* outbuf, llava_buffer* delta_buf, initializer_list<vk::Event> events);
-    vk::Event silu(llava_buffer* buf, initializer_list<vk::Event> events);
     vk::Event rope(llava_buffer* buf, initializer_list<vk::Event> events);
+    vk::Event matmul_silu_ff(llava_buffer *outbuf, llava_buffer *w3_matrix, llava_buffer *w1_matrix, llava_buffer *inbuf, initializer_list<vk::Event> events);
     vk::Event record_command(llava_pipeline *pipeline, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY = 1, uint32_t countZ = 1);
     vk::Event record_command(const string& pipeline_name, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY = 1, uint32_t countZ = 1);
     vk::Event record_execution(vk::Event startEvent);
@@ -73,8 +74,6 @@ public: // various methods
 
 private:
     shared_ptr<ggml_file> model;
-    vk::PhysicalDevice get_physical_device();
-    [[nodiscard]] uint32_t get_queue_family_index() const;
 
     vk::Instance vulkan_instance;
     vk::PhysicalDevice physical_device;
@@ -116,6 +115,7 @@ private:
     void reset_command_buffer_events();
     u32 find_suitable_memory_type(const vk::PhysicalDevice &_physical_device);
     u32 find_suitable_queue_index();
+    vk::PhysicalDevice find_suitable_physical_device();
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H
