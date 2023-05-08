@@ -473,8 +473,7 @@ vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llav
         assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
         return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
     } else {
-        cout << "MATMUL " << matrix->shape.first << "," << matrix->shape.second << " " << ftype_name(outbuf->type) << " " << ftype_name(matrix->type) << " " << ftype_name(inbuf->type) << endl;
-        return nullptr;
+        assert(false);
     }
 }
 
@@ -507,8 +506,7 @@ vk::Event llava_context::multi_head_attention(llava_buffer* out_buffer, llava_bu
     assert(out_buffer->shape.first == backlog_size);
     assert(out_buffer->shape.second == model->header.n_heads);
 
-    assert((model->header.n_heads * backlog_size) % workgroup_size == 0);
-    return record_command("mhsa", {out_buffer, cache_buffer, query}, events, model->header.n_heads * backlog_size / workgroup_size);
+    return record_command("mhsa", {out_buffer, cache_buffer, query}, events, updiv(model->header.n_heads * backlog_size, workgroup_size));
 }
 
 vk::Event llava_context::inplace_softmax(llava_buffer* inout_buffer, initializer_list<vk::Event> events) {
