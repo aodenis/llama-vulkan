@@ -1,6 +1,7 @@
 #include "llava_context.h"
 #include "llava_pipeline.h"
 #include "llava_buffer.h"
+#include "llava_device_memory.h"
 #include "llava_layer.h"
 #include "utils.h"
 #include <iostream>
@@ -322,18 +323,20 @@ int llava_context::run(int argc, char **argv) {
     specialization_variables.matmul_ff_q4_blocks_per_row = model->ff_size / 32;
     specialization_variables.matmul_ff_q4_block_count_per_worker = updiv(specialization_variables.matmul_ff_q4_blocks_per_row, specialization_variables.matmul_dim_row_worker_count);
 
-    current_thought = new llava_buffer(this, "current_thought", ggml_value_type::f32, model->header.dim);
-    current_thought_sublayer = new llava_buffer(this, "current_thought_sublayer", ggml_value_type::f32, model->header.dim);
-    properties_mask = new llava_buffer(this, "properties_mask", ggml_value_type::f32, model->ff_size, 1, 1024);
-    properties_associated_values = new llava_buffer(this, "properties_associated_values", ggml_value_type::f32, model->ff_size, 1, 1024);
-    current_Q = new llava_buffer(this, "current_Q", ggml_value_type::f32, model->header.dim);
-    current_K = new llava_buffer(this, "current_K", ggml_value_type::f32, model->header.dim);
-    attn_result = new llava_buffer(this, "attn_result", ggml_value_type::f32, backlog_size, model->header.n_heads);
-    config_buffer = new llava_buffer(this, "config_buffer", ggml_value_type::f32, sizeof(shared_state) / sizeof(float), 1, 1);
-    current_V = new llava_buffer(this, "current_V", ggml_value_type::f32, model->header.dim);
-    norm_w = new llava_buffer(this, model->get_buffer_descriptor("norm"));
-    output_w = new llava_buffer(this, model->get_buffer_descriptor("output"));
-    output_probs = new llava_buffer(this, "output_probs", ggml_value_type::f32, model->header.vocab_size);
+    main_buffer_memory = new llava_device_memory(this);
+    current_thought = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    current_thought_sublayer = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    properties_mask = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
+    properties_associated_values = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
+    current_Q = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    current_K = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    attn_result = new llava_buffer(this, ggml_value_type::f32, backlog_size, model->header.n_heads, main_buffer_memory);
+    config_buffer = new llava_buffer(this, ggml_value_type::f32, sizeof(shared_state) / sizeof(float), 1, main_buffer_memory);
+    current_V = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    norm_w = new llava_buffer(this, model->get_buffer_descriptor("norm"), main_buffer_memory);
+    output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
+    output_probs = new llava_buffer(this, ggml_value_type::f32, model->header.vocab_size, 1, main_buffer_memory);
+    main_buffer_memory->freeze();
 
     for (u32 i = 0; i < model->header.n_layers; ++i) {
         layers.emplace_back(this, i);
@@ -445,14 +448,14 @@ vk::Event llava_context::record_execution(vk::Event startEvent) {
 }
 
 u32 llava_context::get_last_predicted_token() const {
-    auto* res = static_cast<float *>(device.mapMemory(output_probs->deviceMemory, 0, output_probs->size));
+    auto* res = static_cast<float *>(device.mapMemory(output_probs->device_memory->device_memory, output_probs->get_sub_buffers().front().offset, output_probs->get_sub_buffers().front().size));
     u32 best = 0;
     for(uint32_t i = 1; i < model->header.vocab_size; ++i) {
         if (res[i] > res[best]) {
             best = i;
         }
     }
-    device.unmapMemory(output_probs->deviceMemory);
+    device.unmapMemory(output_probs->device_memory->device_memory);
     return best;
 }
 
@@ -559,7 +562,7 @@ vk::Event llava_context::record_command(const string &pipeline_name, const initi
                                       uint32_t countZ) {
     u32 buffer_count = 0;
     for(llava_buffer * buffer : buffers) {
-        buffer_count += buffer->buffers.size();
+        buffer_count += buffer->get_sub_buffers().size();
     }
     auto* pipeline = get_pipeline(pipeline_name, buffer_count);
     return record_command(pipeline, buffers, events, countX, countY, countZ);

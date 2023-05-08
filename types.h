@@ -12,6 +12,7 @@ class llava_context;
 class llava_pipeline;
 class llava_layer;
 class llava_buffer;
+class llava_device_memory;
 
 using u64 = uint64_t;
 using u32 = uint32_t;

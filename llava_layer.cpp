@@ -1,21 +1,26 @@
 #include <iostream>
 #include "llava_buffer.h"
 #include "llava_layer.h"
+#include "llava_device_memory.h"
 #include "llava_context.h"
 
 llava_layer::llava_layer(llava_context *context, u32 layer_id) {
+    layer_allocation = new llava_device_memory(context);
     string prefix = "layers." + to_string(layer_id) + ".";
-    attention_wq = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wq"));
-    attention_wk = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wk"));
-    attention_wv = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wv"));
-    attention_wo = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wo"));
-    feed_forward_w1 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w1"));
-    feed_forward_w2 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w2"));
-    feed_forward_w3 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w3"));
-    attention_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention_norm"));
-    ffn_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "ffn_norm"));
-    k_cache = new llava_buffer(context, "k_cache", ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
-    v_cache = new llava_buffer(context, "v_cache", ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
+    attention_wq = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wq"), layer_allocation);
+    attention_wk = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wk"), layer_allocation);
+    attention_wv = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wv"), layer_allocation);
+    attention_wo = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wo"), layer_allocation);
+    feed_forward_w1 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w1"), layer_allocation);
+    feed_forward_w2 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w2"), layer_allocation);
+    feed_forward_w3 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w3"), layer_allocation);
+    attention_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention_norm"), layer_allocation);
+    ffn_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "ffn_norm"), layer_allocation);
+    k_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
+    v_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
+    if (context->allocate_buffers) {
+        layer_allocation->freeze();
+    }
 }
 
 llava_layer::~llava_layer() {
@@ -30,6 +35,7 @@ llava_layer::~llava_layer() {
     delete ffn_norm;
     delete k_cache;
     delete v_cache;
+    delete layer_allocation;
 }
 
 vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {

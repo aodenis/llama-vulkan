@@ -16,8 +16,10 @@ llava_command::llava_command(llava_pipeline *pipeline,
 {
     vector<pair<vk::Buffer, bool>> buffers;
     for (llava_buffer* buffer: _buffers) {
-        for(auto& x : buffer->buffers) {
-            buffers.emplace_back(x, buffer->backing_name.empty());
+        bool is_dynamic_buffer = buffer->backing_buffer_name.empty();
+        assert(buffer->is_allocated());
+        for(auto& sub_buffer : buffer->get_sub_buffers()) {
+            buffers.emplace_back(sub_buffer.buffer, is_dynamic_buffer);
         }
     }
 

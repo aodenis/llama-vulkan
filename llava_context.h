@@ -94,6 +94,7 @@ private:
     vector<vk::CommandBuffer> command_buffer_raw;
 
 private: // buffers
+    llava_device_memory* main_buffer_memory = nullptr;
     llava_buffer* current_thought = nullptr;
     llava_buffer* current_thought_sublayer = nullptr;
     llava_buffer* current_Q = nullptr;

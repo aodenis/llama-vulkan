@@ -1,5 +1,6 @@
 #include "utils.h"
 #include <cassert>
+#include <cstring>
 
 size_t matrix_size(ggml_value_type type, u32 shape1, u32 shape2) {
     if (type == ggml_value_type::f16) {
@@ -29,4 +30,16 @@ const char* ftype_name(ggml_value_type type) {
             return "q4_1";
     }
     return nullptr;
+}
+
+bool ends_with(const string& a, const string& b) {
+    if (a.size() < b.size())
+        return false;
+    return memcmp(a.data() + a.size() - b.size(), b.data(), b.size()) == 0;
+}
+
+bool starts_with(const string& a, const string& b) {
+    if (a.size() < b.size())
+        return false;
+    return memcmp(a.data(), b.data(), b.size()) == 0;
 }
