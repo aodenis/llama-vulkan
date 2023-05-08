@@ -11,7 +11,7 @@ Vulkan 1.2 is used and no extension is required.
 ## Currently working
 * Tokenizer
 * GGML parsing and mapping for q4_0 models
-* Basic evaluation of the 7B model
+* Evaluation of 7B and 13B models
 
 ## TODO
 * Support for memory swapping
