@@ -100,6 +100,7 @@ private: // buffers
     llava_buffer* current_Q = nullptr;
     llava_buffer* current_K = nullptr;
     llava_buffer* current_V = nullptr;
+    llava_buffer* current_Vout = nullptr;
     llava_buffer* attn_result = nullptr;
     llava_buffer* config_buffer = nullptr;
     llava_buffer* norm_w = nullptr;

@@ -66,6 +66,7 @@ llava_context::~llava_context() {
     delete current_Q;
     delete current_K;
     delete current_V;
+    delete current_Vout;
     delete attn_result;
     delete config_buffer;
     delete norm_w;
@@ -73,11 +74,13 @@ llava_context::~llava_context() {
     delete output_probs;
     delete properties_mask;
     delete properties_associated_values;
+    delete main_buffer_memory;
     current_thought = nullptr;
     current_thought_sublayer = nullptr;
     current_Q = nullptr;
     current_K = nullptr;
     current_V = nullptr;
+    current_Vout = nullptr;
     attn_result = nullptr;
     config_buffer = nullptr;
     norm_w = nullptr;
@@ -85,6 +88,7 @@ llava_context::~llava_context() {
     output_probs = nullptr;
     properties_mask = nullptr;
     properties_associated_values = nullptr;
+    main_buffer_memory = nullptr;
 
     if (device) {
         device.destroy(command_pool);
@@ -333,6 +337,7 @@ int llava_context::run(int argc, char **argv) {
     attn_result = new llava_buffer(this, ggml_value_type::f32, backlog_size, model->header.n_heads, main_buffer_memory);
     config_buffer = new llava_buffer(this, ggml_value_type::f32, sizeof(shared_state) / sizeof(float), 1, main_buffer_memory);
     current_V = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    current_Vout = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
     norm_w = new llava_buffer(this, model->get_buffer_descriptor("norm"), main_buffer_memory);
     output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
     output_probs = new llava_buffer(this, ggml_value_type::f32, model->header.vocab_size, 1, main_buffer_memory);

@@ -46,15 +46,15 @@ vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
     vk::Event evtRoPEQ = ctx->rope(ctx->current_Q, {evtQ});
     vk::Event evtRoPEK = ctx->rope(ctx->current_K, {evtK});
 
-    vk::Event evtV = ctx->matmul(ctx->current_V, attention_wv, ctx->current_thought_sublayer, {evt_norm});
     vk::Event evtKc = ctx->kv_copy(k_cache, ctx->current_K, {evtRoPEK});
-    vk::Event evtVc = ctx->kv_copy(v_cache, ctx->current_V, {evtV});
     vk::Event evtSA = ctx->multi_head_attention(ctx->attn_result, k_cache, ctx->current_Q, {evtRoPEQ, evtKc});
     vk::Event evtSoftmax = ctx->inplace_softmax(ctx->attn_result, {evtSA});
-    vk::Event evtKQV = ctx->perform_kqv_matching(ctx->current_V, v_cache, ctx->attn_result, {evtSoftmax, evtVc}); // current_V is used a tmp buffer here
-    vk::Event evtSA_out = ctx->matmul(ctx->current_thought_sublayer, attention_wo, ctx->current_V, {evtKQV});
-    vk::Event evtSA_add = ctx->add(ctx->current_thought, ctx->current_thought_sublayer, {evtSA_out});
+    vk::Event evtV = ctx->matmul(ctx->current_V, attention_wv, ctx->current_thought_sublayer, {evt_norm});
+    vk::Event evtVc = ctx->kv_copy(v_cache, ctx->current_V, {evtV});
 
+    vk::Event evtKQV = ctx->perform_kqv_matching(ctx->current_Vout, v_cache, ctx->attn_result, {evtSoftmax, evtVc});
+    vk::Event evtSA_out = ctx->matmul(ctx->current_thought_sublayer, attention_wo, ctx->current_Vout, {evtKQV});
+    vk::Event evtSA_add = ctx->add(ctx->current_thought, ctx->current_thought_sublayer, {evtSA_out});
     vk::Event evt_norm_ff = ctx->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, ffn_norm, {evtSA_add});
     vk::Event evt_w13 = ctx->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_sublayer, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
     vk::Event evt_w2 = ctx->matmul(ctx->current_thought_sublayer, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
