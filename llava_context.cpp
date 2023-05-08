@@ -421,7 +421,7 @@ void llava_context::process_token(u32 token_id) {
     };
     config_buffer->write_full(&config, ggml_value_type::f32);
     tokens.push_back(token_id);
-    vk::SubmitInfo submitInfo({}, {}, command_buffer_raw, {}, nullptr);
+    vk::SubmitInfo submitInfo({}, {}, command_buffer_raw, {});
     queue.submit({submitInfo});
     queue.waitIdle();
 }
