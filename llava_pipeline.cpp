@@ -180,10 +180,11 @@ static TBuiltInResource default_resources(llava_context* ctx)
 #endif
 
 llava_pipeline::llava_pipeline(llava_context* ctx,
-                               const string& shader_name,
+                               const string& _shader_name,
                                bool use_prebuilt_shaders,
                                uint32_t argument_count) : argcount(argument_count),
-                                                          context(ctx) {
+                                                          context(ctx),
+                                                          shader_name(_shader_name) {
     vector<vk::DescriptorSetLayoutBinding> bindings;
     bindings.reserve(argument_count);
     while(bindings.size() < argument_count) {

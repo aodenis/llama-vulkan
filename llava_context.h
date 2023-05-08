@@ -60,6 +60,7 @@ public:
 public: // various methods
     vk::Event normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events);
     vk::Event matmul(llava_buffer* outbuf, llava_buffer*, llava_buffer*, initializer_list<vk::Event> events);
+    vk::Event matmul_add_inplace(llava_buffer* outbuf, llava_buffer*, llava_buffer*, initializer_list<vk::Event> events);
     vk::Event kv_copy(llava_buffer*, llava_buffer*, initializer_list<vk::Event> events);
     vk::Event multi_head_attention(llava_buffer* attn_out, llava_buffer* k_cache, llava_buffer* query, initializer_list<vk::Event> events);
     vk::Event perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out, initializer_list<vk::Event> events);
@@ -97,6 +98,7 @@ private: // buffers
     llava_device_memory* main_buffer_memory = nullptr;
     llava_buffer* current_thought = nullptr;
     llava_buffer* current_thought_sublayer = nullptr;
+    llava_buffer* current_thought_middle_normd = nullptr;
     llava_buffer* current_Q = nullptr;
     llava_buffer* current_K = nullptr;
     llava_buffer* current_V = nullptr;

@@ -56,6 +56,10 @@ void main()
 
     const vec4 result = local_sum(local_row_id, worker_id, worker_sum);
     if (worker_id == 0) {
+    #ifdef MATMUL_ADD
+        outp.values[row_id] += result;
+    #else
         outp.values[row_id] = result;
+    #endif
     }
 }

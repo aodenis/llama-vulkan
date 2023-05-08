@@ -12,3 +12,5 @@ glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/normalize.glsl -o prebuilt_shad
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/rope.glsl -o prebuilt_shaders/rope.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/softmax.glsl -o prebuilt_shaders/softmax.spv
 glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_silu_ff.glsl -o prebuilt_shaders/matmul_silu_ff.spv
+glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_add_dim.glsl -o prebuilt_shaders/matmul_add_dim.spv
+glslc -fshader-stage=comp -DUSE_SPEVAR=1 shaders/matmul_add_ff.glsl -o prebuilt_shaders/matmul_add_ff.spv

@@ -16,6 +16,7 @@ public:
 public:
     const u32 argcount;
     llava_context* const context;
+    const string shader_name;
 
 private:
     vk::ShaderModule shaderModule;

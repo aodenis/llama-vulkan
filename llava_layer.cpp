@@ -53,11 +53,9 @@ vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
     vk::Event evtVc = ctx->kv_copy(v_cache, ctx->current_V, {evtV});
 
     vk::Event evtKQV = ctx->perform_kqv_matching(ctx->current_Vout, v_cache, ctx->attn_result, {evtSoftmax, evtVc});
-    vk::Event evtSA_out = ctx->matmul(ctx->current_thought_sublayer, attention_wo, ctx->current_Vout, {evtKQV});
-    vk::Event evtSA_add = ctx->add(ctx->current_thought, ctx->current_thought_sublayer, {evtSA_out});
-    vk::Event evt_norm_ff = ctx->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, ffn_norm, {evtSA_add});
-    vk::Event evt_w13 = ctx->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_sublayer, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
-    vk::Event evt_w2 = ctx->matmul(ctx->current_thought_sublayer, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
-    vk::Event evt_ff_add = ctx->add(ctx->current_thought, ctx->current_thought_sublayer, {evt_w2});
-    return evt_ff_add;
+    vk::Event evtSA_out = ctx->matmul_add_inplace(ctx->current_thought, attention_wo, ctx->current_Vout, {evtKQV});
+    vk::Event evt_norm_ff = ctx->normalize_logit(ctx->current_thought_middle_normd, ctx->current_thought, ffn_norm, {evtSA_out});
+    vk::Event evt_w13 = ctx->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_middle_normd, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
+    vk::Event evt_w2 = ctx->matmul_add_inplace(ctx->current_thought, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
+    return evt_w2;
 }

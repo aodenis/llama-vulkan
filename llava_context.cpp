@@ -64,6 +64,7 @@ llava_context::~llava_context() {
     delete current_thought;
     delete current_thought_sublayer;
     delete current_Q;
+    delete current_thought_middle_normd;
     delete current_K;
     delete current_V;
     delete current_Vout;
@@ -77,6 +78,7 @@ llava_context::~llava_context() {
     delete main_buffer_memory;
     current_thought = nullptr;
     current_thought_sublayer = nullptr;
+    current_thought_middle_normd = nullptr;
     current_Q = nullptr;
     current_K = nullptr;
     current_V = nullptr;
@@ -330,6 +332,7 @@ int llava_context::run(int argc, char **argv) {
     main_buffer_memory = new llava_device_memory(this);
     current_thought = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
     current_thought_sublayer = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
+    current_thought_middle_normd = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
     properties_mask = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
     properties_associated_values = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
     current_Q = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
@@ -480,6 +483,23 @@ vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llav
     } else if (inbuf->shape.first == model->ff_size) {
         assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
         return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
+    } else {
+        assert(false);
+    }
+}
+
+vk::Event llava_context::matmul_add_inplace(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
+    assert(inbuf->shape.first == matrix->shape.second);
+    assert(outbuf->shape.first == matrix->shape.first);
+    assert(inbuf->shape.second == 1);
+    assert(outbuf->shape.second == 1);
+
+    if (inbuf->shape.first == model->header.dim) {
+        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
+        return record_command("matmul_add_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
+    } else if (inbuf->shape.first == model->ff_size) {
+        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
+        return record_command("matmul_add_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
     } else {
         assert(false);
     }
