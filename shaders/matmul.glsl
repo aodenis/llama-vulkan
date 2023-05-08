@@ -39,7 +39,7 @@ void main()
     vec4 worker_sum = vec4(0);
     [[unroll]] for (int t = 0; t < MATMUL_Q4_BLOCK_COUNT_PER_WORKER; t++) {
         vec4 block_mat_value = vec4(0.);
-        uint block_id = min(MATMUL_Q4_BLOCK_COUNT_PER_WORKER * worker_id + t, MATMUL_Q4_BLOCKS_PER_ROW - 1);
+        uint block_id = min(t * MATMUL_Y + worker_id, MATMUL_Q4_BLOCKS_PER_ROW - 1);
 
         [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
             ivec4 sub_block = matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
@@ -49,7 +49,7 @@ void main()
             m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
             block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][1];
         }
-        if (MATMUL_Q4_BLOCK_COUNT_PER_WORKER * worker_id + t < MATMUL_Q4_BLOCKS_PER_ROW) {
+        if (t * MATMUL_Y + worker_id < MATMUL_Q4_BLOCKS_PER_ROW) {
             worker_sum += block_mat_value * matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id];
         }
     }
