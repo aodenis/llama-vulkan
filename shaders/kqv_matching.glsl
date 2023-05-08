@@ -11,11 +11,11 @@ layout (binding = 0) buffer OutBuffer {
 } outp;
 
 layout (binding = 1) buffer readonly VCacheBuffer {
-    float values[];
+    float values[]; // [BACKLOG][DIM]
 } vcache;
 
 layout (binding = 2) buffer readonly AttnBuffer {
-    float values[];
+    float values[]; // [BACKLOG][HEAD_COUNT]
 } attn;
 
 #ifdef USE_SPEVAR
@@ -30,7 +30,9 @@ void main()
     const uint local_v_row_id = gl_LocalInvocationID.x;
     const uint backlog_id = gl_GlobalInvocationID.y;
 
-    const float this_match = attn.values[backlog_id * HEAD_COUNT + (v_row_id >> BACKLOG_BITS)] * vcache.values[backlog_id * DIM + v_row_id];
-
-    outp.values[v_row_id] = local_sum(local_v_row_id, backlog_id, this_match);
+    const float this_match = (v_row_id < DIM) ? attn.values[backlog_id * HEAD_COUNT + (v_row_id / ROT)] * vcache.values[backlog_id * DIM + v_row_id] : 0.;
+    const float total_match = local_sum(local_v_row_id, backlog_id, this_match);
+    if (v_row_id < DIM) {
+        outp.values[v_row_id] = total_match;
+    }
 }

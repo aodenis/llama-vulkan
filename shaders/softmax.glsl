@@ -29,12 +29,15 @@ void main()
     const uint head_id = gl_GlobalInvocationID.x;
     const uint cache_entry_id = gl_GlobalInvocationID.y;
 
-    float a = exp(iobuf.values[cache_entry_id * HEAD_COUNT + head_id] * main_factor);
+    const float input_value = (head_id < HEAD_COUNT) ? iobuf.values[cache_entry_id * HEAD_COUNT + head_id] : 0.;
+    float a = exp(input_value * main_factor);
     if (cache_entry_id > config.token_count) {
         a = 0;
     }
 
     const float head_exp_sum = local_sum(gl_LocalInvocationID.x, cache_entry_id, a);
 
-    iobuf.values[cache_entry_id * HEAD_COUNT + head_id] = a / head_exp_sum;
+    if (head_id < HEAD_COUNT) {
+        iobuf.values[cache_entry_id * HEAD_COUNT + head_id] = a / head_exp_sum;
+    }
 }

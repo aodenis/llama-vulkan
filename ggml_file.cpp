@@ -51,8 +51,6 @@ ggml_file::ggml_file(const char *filepath) : header{} {
     assert(header.n_heads > 0);
     assert(header.n_layers > 0);
     assert(header.rot * header.n_heads == header.dim);
-    assert(header.ftype <= 3);
-    assert(header.ftype >= 0);
 
     cursor = mapping + sizeof(ggml_header);
     for(int32_t i = 0; i < header.vocab_size; ++i) {

@@ -338,7 +338,7 @@ int llava_context::run(int argc, char **argv) {
     for (u32 i = 0; i < model->header.n_layers; ++i) {
         layers.emplace_back(this, i);
     }
-    u32 eos_id = 13;
+    u32 eos_id = 2;
     record_execution(nullptr);
     uint32_t next_token = 0;
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -367,7 +367,7 @@ int llava_context::run(int argc, char **argv) {
     cout << endl;
     auto end_time = std::chrono::high_resolution_clock::now();
     u64 ns = chrono::duration_cast<chrono::nanoseconds>(end_time - start_time).count();
-    cout << tokens.size() << " tokens in " << ns << " nanoseconds" << endl;
+    cout << tokens.size() << " tokens in " << (ns/1000000) << " milliseconds" << endl;
     cout << (ns/(1000000*tokens.size())) << " milliseconds per token" << endl;
     return 0;
 }
@@ -515,8 +515,7 @@ vk::Event llava_context::inplace_softmax(llava_buffer* inout_buffer, initializer
     assert(inout_buffer->shape.first == backlog_size);
     assert(inout_buffer->shape.second == model->header.n_heads);
 
-    assert(model->header.n_heads % specialization_variables.softmax_head_per_wavefront == 0);
-    return record_command("softmax", {config_buffer, inout_buffer}, events, model->header.n_heads / specialization_variables.softmax_head_per_wavefront);
+    return record_command("softmax", {config_buffer, inout_buffer}, events, updiv(model->header.n_heads, specialization_variables.softmax_head_per_wavefront));
 }
 
 vk::Event llava_context::add(llava_buffer* buf, llava_buffer* delta_buf, initializer_list<vk::Event> events) {
@@ -540,7 +539,7 @@ vk::Event llava_context::perform_kqv_matching(llava_buffer* v_out, llava_buffer*
     assert(softmax_out->shape.first == backlog_size);
     assert(softmax_out->shape.second == model->header.n_heads);
 
-    return record_command("kqv_matching", {v_out, v_cache, softmax_out}, events, model->header.dim / 8);
+    return record_command("kqv_matching", {v_out, v_cache, softmax_out}, events, updiv(model->header.dim, specialization_variables.softmax_head_per_wavefront));
 }
 
 vk::Event llava_context::record_command(llava_pipeline *pipeline,
