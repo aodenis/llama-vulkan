@@ -141,32 +141,39 @@ vector<buffer_record_t> const &llava_buffer::get_sub_buffers() const {
 
 void llava_buffer::write_full(const void *in_buf, ggml_value_type input_type) const {
     assert(is_allocated());
-    if (type == ggml_value_type::f32) {
-        if (input_type == ggml_value_type::q4_0) {
-            assert(shape.second == 1);
-            assert(shape.first % 32 == 0);
-            auto* data = (float*)(context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset, 4 * shape.first));
+    write_f32(in_buf, input_type, 0, shape.first * shape.second);
+}
 
-            for (u32 i = 0; i < shape.first / 32; i++) {
-                float d = ((float const*)in_buf)[5 * i];
-                u8 const* qbase = ((u8 const*)in_buf) + (20 * i + 4);
-                for (u32 j = 0; j < 16; j++) {
-                    int q = (int)(qbase[j]);
-                    data[i * 32 + 2 * j] = ((float)((q & 0xf) - 8)) * d;
-                    data[i * 32 + 2 * j + 1] = ((float)((q >> 4) - 8)) * d;
-                }
-            }
-
-            context->get_device().unmapMemory(device_memory->device_memory);
-            return;
-        } else if (input_type == ggml_value_type::f32) {
-            void* data = context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset, 4 * shape.second * shape.first);
-            memcpy(data, in_buf, 4 * shape.second * shape.first);
-            context->get_device().unmapMemory(device_memory->device_memory);
-            return;
-        }
+void llava_buffer::write_f32(const void *in_buf, ggml_value_type input_type, u32 f32_offset, u32 f32_count) const {
+    assert (is_allocated());
+    assert (type == ggml_value_type::f32);
+    if (f32_count == 0) {
+        return;
     }
-    assert(false);
+    assert (f32_offset < shape.first * shape.second);
+    assert ((f32_offset + f32_count) <= (shape.first * shape.second));
+    if (input_type == ggml_value_type::q4_0) {
+        assert((f32_count % 32) == 0);
+        auto* data = (float*)(context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset + 4 * f32_offset, 4 * f32_count));
+
+        for (u32 i = 0; i < f32_count / 32; i++) {
+            float d = ((float const*)in_buf)[5 * i];
+            u8 const* qbase = ((u8 const*)in_buf) + (20 * i + 4);
+            for (u32 j = 0; j < 16; j++) {
+                int q = (int)(qbase[j]);
+                data[i * 32 + 2 * j] = ((float)((q & 0xf) - 8)) * d;
+                data[i * 32 + 2 * j + 1] = ((float)((q >> 4) - 8)) * d;
+            }
+        }
+
+        context->get_device().unmapMemory(device_memory->device_memory);
+        return;
+    } else if (input_type == ggml_value_type::f32) {
+        void* data = context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset + 4 * f32_offset, 4 * f32_count);
+        memcpy(data, in_buf, 4 * f32_count);
+        context->get_device().unmapMemory(device_memory->device_memory);
+        return;
+    }
 }
 
 /*

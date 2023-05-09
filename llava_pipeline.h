@@ -10,7 +10,7 @@ class llava_pipeline {
     friend class llava_context;
     friend class llava_command;
 public:
-    llava_pipeline(llava_context* ctx, const string& shader_name, bool use_prebuilt_shader, uint32_t argument_count);
+    llava_pipeline(llava_context* ctx, string  shader_name, bool use_prebuilt_shader, uint32_t argument_count);
     ~llava_pipeline();
 
 public:

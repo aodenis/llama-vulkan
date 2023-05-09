@@ -5,7 +5,7 @@
 #include "common.glsl"
 
 layout (binding = 0) buffer OutBuffer {
-    float values[BACKLOG * HEAD_COUNT];
+    float values[]; // [Z][BACKLOG * HEAD_COUNT]
 } outp;
 
 layout (binding = 1) buffer readonly MatrixDBuffer {
@@ -13,7 +13,7 @@ layout (binding = 1) buffer readonly MatrixDBuffer {
 } matd;
 
 layout (binding = 2) buffer readonly InFBuffer {
-    vec4 values[HEAD_COUNT * QUARTERROT]; // [HEAD_COUNT][QUARTERROT], logit
+    vec4 values[]; // [Z][HEAD_COUNT][QUARTERROT], logits
 } inp;
 
 #ifdef USE_SPEVAR
@@ -26,15 +26,16 @@ void main()
 {
     const uint row_id = gl_GlobalInvocationID.x;
     const uint head_id = row_id % HEAD_COUNT;
+    const uint z_id = gl_GlobalInvocationID.z;
 
     const uint clamped_row_id = min(row_id, BACKLOG * HEAD_COUNT - 1);
     float result = 0;
     // TODO This could be parallel
     for (int i = 0; i < QUARTERROT; i++) {
-        result += dot(inp.values[head_id * QUARTERROT + i], matd.values[clamped_row_id * QUARTERROT + i]);
+        result += dot(inp.values[z_id * HEAD_COUNT * QUARTERROT + head_id * QUARTERROT + i], matd.values[clamped_row_id * QUARTERROT + i]);
     }
 
     if (clamped_row_id == row_id) {
-        outp.values[row_id] = result;
+        outp.values[z_id * BACKLOG * HEAD_COUNT + row_id] = result;
     }
 }

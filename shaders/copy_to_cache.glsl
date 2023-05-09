@@ -29,5 +29,7 @@ layout (local_size_x = MAX_WGS, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
     const uint i = gl_GlobalInvocationID.x;
-    cache.values[config.token_count * DIM + i] = inp.values[i];
+    const uint z_id = gl_GlobalInvocationID.z;
+
+    cache.values[(config.token_count + z_id) * DIM + i] = inp.values[i + DIM * z_id];
 }

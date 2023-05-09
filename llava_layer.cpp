@@ -40,7 +40,6 @@ llava_layer::~llava_layer() {
 
 vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
     vk::Event evt_norm = ctx->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, attention_norm, {event});
-
     vk::Event evtQ = ctx->matmul(ctx->current_Q, attention_wq, ctx->current_thought_sublayer, {evt_norm});
     vk::Event evtK = ctx->matmul(ctx->current_K, attention_wk, ctx->current_thought_sublayer, {evt_norm});
     vk::Event evtRoPEQ = ctx->rope(ctx->current_Q, {evtQ});

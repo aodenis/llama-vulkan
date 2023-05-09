@@ -1,5 +1,6 @@
 #include "llava_pipeline.h"
 #include "llava_context.h"
+#include <utility>
 #include <vulkan/vulkan.hpp>
 #include <fcntl.h>
 #include <unistd.h>
@@ -180,11 +181,11 @@ static TBuiltInResource default_resources(llava_context* ctx)
 #endif
 
 llava_pipeline::llava_pipeline(llava_context* ctx,
-                               const string& _shader_name,
+                               string _shader_name,
                                bool use_prebuilt_shaders,
                                uint32_t argument_count) : argcount(argument_count),
                                                           context(ctx),
-                                                          shader_name(_shader_name) {
+                                                          shader_name(std::move(_shader_name)) {
     vector<vk::DescriptorSetLayoutBinding> bindings;
     bindings.reserve(argument_count);
     while(bindings.size() < argument_count) {

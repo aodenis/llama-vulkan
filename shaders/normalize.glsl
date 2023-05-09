@@ -7,11 +7,11 @@
 #include "common.glsl"
 
 layout (binding = 0) buffer OutBuffer {
-    vec4 values[DIM / 4];
+    vec4 values[]; // [Z][DIM/4]
 } outp;
 
 layout (binding = 1) buffer readonly InBuffer {
-    vec4 values[DIM / 4];
+    vec4 values[]; // [Z][DIM/4]
 } inp;
 
 layout (binding = 2) buffer readonly WeightBuffer {
@@ -34,10 +34,11 @@ layout (local_size_x = MAX_WGS, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
     const uint i = gl_GlobalInvocationID.x;
+    const uint z_id = gl_GlobalInvocationID.z;
 
     float mean_part = 0;
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)];
         mean_part += dot(element, vec4(1.));
     }
 
@@ -45,7 +46,7 @@ void main()
     mean_part = 0;
 
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)];
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)];
         element = ((managed_count * i + j) < DIM) ? (element - vec4(mean)) : vec4(0.);
         mean_part += dot(element, element);
     }
@@ -53,9 +54,9 @@ void main()
     mean_part = inversesqrt(local_sum(0, i, mean_part) / DIM);
 
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[min((managed_count * i + j), DIM - 1)] * weights.values[min((managed_count * i + j), DIM - 1)];
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)] * weights.values[min((managed_count * i + j), DIM - 1)];
         if (managed_count * i + j < DIM) {
-            outp.values[managed_count * i + j] = element * mean_part;
+            outp.values[z_id * (DIM / 4) + managed_count * i + j] = element * mean_part;
         }
     }
 }

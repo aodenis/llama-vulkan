@@ -27,6 +27,7 @@ public:
     void f32_dump(size_t n = 32, size_t offset = 0, bool in_line = true) const;
     void q40_dump(size_t n = 256, bool in_line = false) const;
     void write_full(void const* in_buf, ggml_value_type intype) const;
+    void write_f32(void const* in_buf, ggml_value_type intype, u32 f32_offset, u32 f32_count) const;
     bool is_allocated() const;
     void fill_f32(float value) const;
     bool contains_nan() const;

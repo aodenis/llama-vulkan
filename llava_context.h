@@ -51,11 +51,12 @@ public:
     vk::PhysicalDevice& get_physical_device();
     [[nodiscard]] uint32_t get_queue_family_index() const;
     shared_ptr<ggml_file> get_model();
-    u32 backlog_size = 128;
+    u32 backlog_size = 0;
+    u32 batch_size = 0;
     u32 workgroup_size = 1024;
     bool allocate_buffers = true;
     specialization_variables_t specialization_variables{};
-    u32 mainMemoryTypeIndex = 3;
+    u32 mainMemoryTypeIndex = ~0U;
 
 public: // various methods
     vk::Event normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events);
@@ -70,7 +71,6 @@ public: // various methods
     vk::Event matmul_silu_ff(llava_buffer *outbuf, llava_buffer *w3_matrix, llava_buffer *w1_matrix, llava_buffer *inbuf, initializer_list<vk::Event> events);
     vk::Event record_command(llava_pipeline *pipeline, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY = 1, uint32_t countZ = 1);
     vk::Event record_command(const string& pipeline_name, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY = 1, uint32_t countZ = 1);
-    vk::Event record_execution(vk::Event startEvent);
     [[nodiscard]] string generate_spevar_define_string() const;
 
 private:
@@ -88,11 +88,9 @@ private:
     u32 verbosity = 0;
 
     list<llava_layer> layers;
-    void process_token(u32 new_token);
+    void process_tokens(vector<u32> const& token_ids);
     vector<u32> tokens;
     [[nodiscard]] u32 get_last_predicted_token() const;
-    list<llava_command> command_buffer;
-    vector<vk::CommandBuffer> command_buffer_raw;
 
 private: // buffers
     llava_device_memory* main_buffer_memory = nullptr;
@@ -111,15 +109,29 @@ private: // buffers
     llava_buffer* properties_mask = nullptr;
     llava_buffer* properties_associated_values = nullptr;
 
-private:
+private: // config
     bool use_prebuilt_shaders = false;
 
-private:
+private: // storage
     map<string, llava_pipeline> named_pipelines;
-    void reset_command_buffer_events();
+
+private:
     u32 find_suitable_memory_type(const vk::PhysicalDevice &_physical_device);
     u32 find_suitable_queue_index();
     vk::PhysicalDevice find_suitable_physical_device();
+
+private:
+    void reset_main_buffers();
+
+private: // command buffer stuff
+    list<llava_command> command_buffer;
+    vector<vk::CommandBuffer> command_buffer_raw;
+
+private: // command buffer management
+    vk::Event record_execution(vk::Event startEvent);
+    void reset_command_buffer_events();
+    void reset_command_buffer();
+    bool prepare_execution(u32 wanted_backlog_size, u32 wanted_batch_size);
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H

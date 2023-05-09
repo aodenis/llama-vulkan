@@ -7,7 +7,7 @@
 #include "common.glsl"
 
 layout (binding = 0) buffer OutBuffer {
-    float values[DIM];
+    float values[]; // [Z][DIM]
 } outp;
 
 layout (binding = 1) buffer readonly VCacheBuffer {
@@ -15,7 +15,7 @@ layout (binding = 1) buffer readonly VCacheBuffer {
 } vcache;
 
 layout (binding = 2) buffer readonly AttnBuffer {
-    float values[]; // [BACKLOG][HEAD_COUNT]
+    float values[]; // [Z][BACKLOG][HEAD_COUNT]
 } attn;
 
 #ifdef USE_SPEVAR
@@ -29,10 +29,11 @@ void main()
     const uint v_row_id = gl_GlobalInvocationID.x;
     const uint local_v_row_id = gl_LocalInvocationID.x;
     const uint backlog_id = gl_GlobalInvocationID.y;
+    const uint z_id = gl_GlobalInvocationID.z;
 
-    const float this_match = (v_row_id < DIM) ? attn.values[backlog_id * HEAD_COUNT + (v_row_id / ROT)] * vcache.values[backlog_id * DIM + v_row_id] : 0.;
+    const float this_match = (v_row_id < DIM) ? attn.values[z_id * BACKLOG * HEAD_COUNT + backlog_id * HEAD_COUNT + (v_row_id / ROT)] * vcache.values[backlog_id * DIM + v_row_id] : 0.;
     const float total_match = local_sum(local_v_row_id, backlog_id, this_match);
     if (v_row_id < DIM) {
-        outp.values[v_row_id] = total_match;
+        outp.values[z_id * DIM + v_row_id] = total_match;
     }
 }

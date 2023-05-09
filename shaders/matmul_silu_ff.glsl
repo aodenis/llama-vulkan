@@ -15,7 +15,7 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer OutBuffer {
+layout (binding = 0) buffer writeonly OutBuffer {
     vec4 values[];
 } outp;
 
@@ -51,6 +51,7 @@ void main()
     const uint row_id = gl_GlobalInvocationID.x;
     const uint local_row_id = gl_LocalInvocationID.x;
     const uint worker_id = gl_GlobalInvocationID.y;
+    const uint z_id = gl_GlobalInvocationID.z;
 
     vec4 worker_sum = vec4(0);
     [[unroll]] for (int t = 0; t < MATMUL_Q4_BLOCK_COUNT_PER_WORKER; t++) {
@@ -60,10 +61,10 @@ void main()
         [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
             ivec4 sub_block = mat1q.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
             mat4 m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][0];
+            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][0];
             sub_block >>= 16;
             m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][1];
+            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][1];
         }
         if (t * MATMUL_Y + worker_id < MATMUL_Q4_BLOCKS_PER_ROW) {
             worker_sum += block_mat_value * mat1d.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id];
@@ -80,10 +81,10 @@ void main()
         [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
             ivec4 sub_block = mat2q.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
             mat4 m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][0];
+            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][0];
             sub_block >>= 16;
             m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[block_id][block_block_id][1];
+            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][1];
         }
         if (t * MATMUL_Y + worker_id < MATMUL_Q4_BLOCKS_PER_ROW) {
             worker_sum += block_mat_value * mat2d.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id];
@@ -92,6 +93,6 @@ void main()
 
     const vec4 result2 = local_sum(local_row_id, worker_id, worker_sum);
     if (worker_id == 0) {
-        outp.values[row_id] = result1 * result2 / (exp(-result2) + 1);
+        outp.values[z_id * gl_NumWorkGroups.x * MATMUL_X + row_id] = result1 * result2 / (exp(-result2) + 1);
     }
 }

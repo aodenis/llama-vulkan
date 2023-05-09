@@ -12,7 +12,7 @@ layout (binding = 0) buffer readonly ConfigBuffer {
 } config;
 
 layout (binding = 1) buffer CacheBuffer {
-     float values[DIM];
+     float values[]; // [Z][DIM]
 } inp;
 
 #ifdef USE_SPEVAR
@@ -26,16 +26,17 @@ void main()
     const uint i = gl_GlobalInvocationID.x;
     const uint head_id = i / (2 * QUARTERROT);
     const uint i0 = i % (2 * QUARTERROT);
+    const uint z_id = gl_GlobalInvocationID.z;
 
-    float theta = float(config.token_count) * pow(10000.0, -float(i0)/float(2 * QUARTERROT));
+    float theta = float(config.token_count + z_id) * pow(10000.0, -float(i0)/float(2 * QUARTERROT));
 
     if (2 * i < DIM) {
-        float x = inp.values[2 * i];
-        float y = inp.values[2 * i + 1];
+        float x = inp.values[z_id * DIM + 2 * i];
+        float y = inp.values[z_id * DIM + 2 * i + 1];
 
         float cr = cos(theta);
         float sr = sin(theta);
-        inp.values[2 * i] = x*cr - y*sr;
-        inp.values[2 * i + 1] = x*sr + y*cr;
+        inp.values[z_id * DIM + 2 * i] = x*cr - y*sr;
+        inp.values[z_id * DIM + 2 * i + 1] = x*sr + y*cr;
     }
 }
