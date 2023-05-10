@@ -7,7 +7,11 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer OutBuffer {
+layout (binding = 0) buffer
+#ifndef MATMUL_ADD
+                            writeonly
+#endif
+                                       OutBuffer {
     vec4 values[]; // [Z][MATMUL_Q4_BLOCKS_PER_ROW * 8]
 } outp;
 

@@ -11,7 +11,7 @@ layout (binding = 0) buffer readonly ConfigBuffer {
     uint pad2;
 } config;
 
-layout (binding = 1) buffer CacheBuffer {
+layout (binding = 1) buffer writeonly CacheBuffer {
      float values[];
 } cache;
 

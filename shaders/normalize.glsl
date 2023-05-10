@@ -6,7 +6,7 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer OutBuffer {
+layout (binding = 0) buffer writeonly OutBuffer {
     vec4 values[]; // [Z][DIM/4]
 } outp;
 

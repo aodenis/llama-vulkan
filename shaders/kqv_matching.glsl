@@ -6,7 +6,7 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer OutBuffer {
+layout (binding = 0) buffer writeonly OutBuffer {
     float values[]; // [Z][DIM]
 } outp;
 

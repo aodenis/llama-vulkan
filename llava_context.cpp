@@ -248,19 +248,20 @@ int llava_context::run(int argc, char **argv) {
     glslang::InitializeProcess();
 #endif
 
-    prepare_execution(128, 1);
+    vector<u32> dec_tokens;
+    model->tokenize(dec_tokens, prompt, true);
+    if (dec_tokens.size() > 128) {
+        cerr << "[!] System prompt overflows backlog buffer !" << endl;
+        exit(-1);
+    }
+
+    prepare_execution(128, dec_tokens.size());
 
     for (u32 i = 0; i < model->header.n_layers; ++i) {
         layers.emplace_back(this, i);
     }
 
-    vector<u32> dec_tokens;
-    model->tokenize(dec_tokens, prompt, true);
-    if (dec_tokens.size() >= backlog_size) {
-        cerr << "[!] Prompt overflows backlog buffer !" << endl;
-        exit(-1);
-    }
-
+    record_execution(nullptr);
     u32 eos_id = 2;
     uint32_t next_token = 0;
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -608,7 +609,6 @@ bool llava_context::prepare_execution(u32 wanted_backlog_size, u32 wanted_batch_
     output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
     output_probs = new llava_buffer(this, ggml_value_type::f32, vocab_size, batch_size, main_buffer_memory);
     main_buffer_memory->freeze();
-    cout << "Rebuilt (" << backlog_size << ", " << batch_size << ")" << endl;
     return true;
 }
 
