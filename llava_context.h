@@ -51,10 +51,9 @@ public:
     vk::PhysicalDevice& get_physical_device();
     [[nodiscard]] uint32_t get_queue_family_index() const;
     shared_ptr<ggml_file> get_model();
-    u32 backlog_size = 0;
+    u32 backlog_size = 128;
     u32 batch_size = 0;
     u32 workgroup_size = 1024;
-    bool allocate_buffers = true;
     specialization_variables_t specialization_variables{};
     u32 mainMemoryTypeIndex = ~0U;
 
@@ -131,7 +130,8 @@ private: // command buffer management
     vk::Event record_execution(vk::Event startEvent);
     void reset_command_buffer_events();
     void reset_command_buffer();
-    bool prepare_execution(u32 wanted_backlog_size, u32 wanted_batch_size);
+    void set_batch_size(u32 _batch_size);
+    void recreate_buffers();
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H

@@ -248,22 +248,72 @@ int llava_context::run(int argc, char **argv) {
     glslang::InitializeProcess();
 #endif
 
+    // Compute specialization variables
+    u32 dim = model->header.dim;
+    u32 ff_size = model->ff_size;
+    u32 n_heads =  model->header.n_heads;
+    u32 rot = model->header.rot;
+    auto& spevar = specialization_variables;
+
+    spevar.head_count = n_heads;
+    spevar.rot = rot;
+    spevar.quarterrot = rot / 4;
+    spevar.rot_bits = ulog2(rot);
+    spevar.max_wgs = workgroup_size;
+    spevar.max_wgs_bits = ulog2(workgroup_size);
+    spevar.ff_size = ff_size;
+
+    if (dim == 4096) {
+        spevar.matmul_dim_row_worker_count = 128;
+    } else if (dim == 5120) {
+        spevar.matmul_dim_row_worker_count = 32;
+    } else {
+        assert(false);
+    }
+
+    assert((workgroup_size % spevar.matmul_dim_row_worker_count) == 0);
+    spevar.matmul_dim_row_per_wavefront = workgroup_size / spevar.matmul_dim_row_worker_count;
+    spevar.matmul_dim_row_worker_count_log2 = ulog2(spevar.matmul_dim_row_worker_count);
+    spevar.matmul_dim_q4_blocks_per_row = dim / 32;
+    spevar.matmul_dim_q4_block_count_per_worker = updiv(spevar.matmul_dim_q4_blocks_per_row, spevar.matmul_dim_row_worker_count);
+
+    if ((ff_size == 11008) or (ff_size == 13824)) {
+        spevar.matmul_ff_row_worker_count = 128;
+    } else {
+        assert(false);
+    }
+
+    assert((workgroup_size % spevar.matmul_ff_row_worker_count) == 0);
+
+    spevar.matmul_ff_row_per_wavefront = workgroup_size / spevar.matmul_ff_row_worker_count;
+    spevar.matmul_ff_row_worker_count_log2 = ulog2(spevar.matmul_ff_row_worker_count);
+    spevar.matmul_ff_q4_blocks_per_row = ff_size / 32;
+    spevar.matmul_ff_q4_block_count_per_worker = updiv(spevar.matmul_ff_q4_blocks_per_row, spevar.matmul_dim_row_worker_count);
+
+    spevar.backlog = backlog_size;
+    spevar.softmax_head_per_wavefront = workgroup_size / backlog_size;
+    spevar.backlog_bits = ulog2(backlog_size);
+
     vector<u32> dec_tokens;
     model->tokenize(dec_tokens, prompt, true);
-    if (dec_tokens.size() > 128) {
+    if (dec_tokens.size() > backlog_size) {
         cerr << "[!] System prompt overflows backlog buffer !" << endl;
         exit(-1);
     }
-
-    prepare_execution(128, dec_tokens.size());
 
     for (u32 i = 0; i < model->header.n_layers; ++i) {
         layers.emplace_back(this, i);
     }
 
+    set_batch_size(dec_tokens.size());
+
+    for(auto& layer : layers) {
+        layer.freeze_storage();
+    }
+
     record_execution(nullptr);
     u32 eos_id = 2;
-    uint32_t next_token = 0;
+    uint32_t next_token;
     auto start_time = std::chrono::high_resolution_clock::now();
     process_tokens(dec_tokens);
     next_token = get_last_predicted_token();
@@ -333,7 +383,7 @@ llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argco
 
 void llava_context::process_tokens(vector<u32> const& token_ids) {
     if (token_ids.size() != batch_size) {
-        prepare_execution(backlog_size, token_ids.size());
+        set_batch_size(token_ids.size());
     }
     if (command_buffer.empty()) {
         record_execution(nullptr);
@@ -531,66 +581,26 @@ void llava_context::reset_command_buffer() {
     command_buffer.clear();
 }
 
-bool llava_context::prepare_execution(u32 wanted_backlog_size, u32 wanted_batch_size) {
-    if ((wanted_backlog_size != backlog_size) and (backlog_size != 0)) {
-        cerr << "Backlog size switching is not yet supported" << endl;
-        exit(1);
+void llava_context::set_batch_size(u32 _batch_size) {
+    if (batch_size == _batch_size) {
+        return;
     }
     reset_command_buffer();
-    backlog_size = wanted_backlog_size;
-    batch_size = wanted_batch_size;
+    batch_size = _batch_size;
 
-    // Compute specialization variables
+    recreate_buffers();
+}
+
+void llava_context::recreate_buffers() {
+    reset_main_buffers();
+    if (batch_size == 0) {
+        return;
+    }
+
     u32 dim = model->header.dim;
     u32 ff_size = model->ff_size;
     u32 n_heads =  model->header.n_heads;
-    u32 rot = model->header.rot;
     u32 vocab_size = model->header.vocab_size;
-    auto& spevar = specialization_variables;
-
-    spevar.head_count = n_heads;
-    spevar.rot = rot;
-    spevar.quarterrot = rot / 4;
-    spevar.rot_bits = ulog2(rot);
-    spevar.max_wgs = workgroup_size;
-    spevar.max_wgs_bits = ulog2(workgroup_size);
-    spevar.ff_size = ff_size;
-
-    if (dim == 4096) {
-        spevar.matmul_dim_row_worker_count = 128;
-    } else if (dim == 5120) {
-        spevar.matmul_dim_row_worker_count = 32;
-    } else {
-        assert(false);
-    }
-
-    assert((workgroup_size % spevar.matmul_dim_row_worker_count) == 0);
-    spevar.matmul_dim_row_per_wavefront = workgroup_size / spevar.matmul_dim_row_worker_count;
-    spevar.matmul_dim_row_worker_count_log2 = ulog2(spevar.matmul_dim_row_worker_count);
-    spevar.matmul_dim_q4_blocks_per_row = dim / 32;
-    spevar.matmul_dim_q4_block_count_per_worker = updiv(spevar.matmul_dim_q4_blocks_per_row, spevar.matmul_dim_row_worker_count);
-
-    if ((ff_size == 11008) or (ff_size == 13824)) {
-        spevar.matmul_ff_row_worker_count = 128;
-    } else {
-        assert(false);
-    }
-
-    assert((workgroup_size % spevar.matmul_ff_row_worker_count) == 0);
-
-    spevar.matmul_ff_row_per_wavefront = workgroup_size / spevar.matmul_ff_row_worker_count;
-    spevar.matmul_ff_row_worker_count_log2 = ulog2(spevar.matmul_ff_row_worker_count);
-    spevar.matmul_ff_q4_blocks_per_row = ff_size / 32;
-    spevar.matmul_ff_q4_block_count_per_worker = updiv(spevar.matmul_ff_q4_blocks_per_row, spevar.matmul_dim_row_worker_count);
-
-    spevar.backlog = backlog_size;
-    spevar.softmax_head_per_wavefront = workgroup_size / backlog_size;
-    spevar.backlog_bits = ulog2(backlog_size);
-
-    reset_main_buffers();
-    if (batch_size == 0) {
-        return true;
-    }
 
     // Create main buffers
     main_buffer_memory = new llava_device_memory(this);
@@ -609,7 +619,6 @@ bool llava_context::prepare_execution(u32 wanted_backlog_size, u32 wanted_batch_
     output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
     output_probs = new llava_buffer(this, ggml_value_type::f32, vocab_size, batch_size, main_buffer_memory);
     main_buffer_memory->freeze();
-    return true;
 }
 
 void llava_context::reset_main_buffers() {

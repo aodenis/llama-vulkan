@@ -22,7 +22,7 @@ llava_buffer::llava_buffer(llava_context* _context,
     assert((_type == ggml_value_type::f32) or (_type == ggml_value_type::f16));
     push_buffer(matrix_size(type, shape1, shape2));
 
-    if ((not device_memory_is_shared) and context->allocate_buffers) {
+    if (not device_memory_is_shared) {
         device_memory->freeze();
     }
 }
@@ -50,7 +50,7 @@ llava_buffer::llava_buffer(llava_context* _context,
         assert(false);
     }
 
-    if ((not device_memory_is_shared) and context->allocate_buffers) {
+    if (not device_memory_is_shared) {
         device_memory->freeze();
     }
 }

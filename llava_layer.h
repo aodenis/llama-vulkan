@@ -9,9 +9,11 @@ public:
     llava_layer(llava_context* context, u32 layer_id);
     ~llava_layer();
     vk::Event execute(llava_context* ctx, vk::Event last_event);
+    void freeze_storage();
 
 private:
     llava_device_memory* layer_allocation;
+    llava_device_memory* layer_cache_allocation;
     llava_buffer* attention_wq;
     llava_buffer* attention_wk;
     llava_buffer* attention_wv;

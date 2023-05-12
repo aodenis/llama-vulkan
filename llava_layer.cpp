@@ -6,6 +6,7 @@
 
 llava_layer::llava_layer(llava_context *context, u32 layer_id) {
     layer_allocation = new llava_device_memory(context);
+    layer_cache_allocation = new llava_device_memory(context);
     string prefix = "layers." + to_string(layer_id) + ".";
     attention_wq = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wq"), layer_allocation);
     attention_wk = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention.wk"), layer_allocation);
@@ -16,11 +17,8 @@ llava_layer::llava_layer(llava_context *context, u32 layer_id) {
     feed_forward_w3 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w3"), layer_allocation);
     attention_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention_norm"), layer_allocation);
     ffn_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "ffn_norm"), layer_allocation);
-    k_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
-    v_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim);
-    if (context->allocate_buffers) {
-        layer_allocation->freeze();
-    }
+    k_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
+    v_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
 }
 
 llava_layer::~llava_layer() {
@@ -36,6 +34,7 @@ llava_layer::~llava_layer() {
     delete k_cache;
     delete v_cache;
     delete layer_allocation;
+    delete layer_cache_allocation;
 }
 
 vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
@@ -57,4 +56,9 @@ vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
     vk::Event evt_w13 = ctx->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_middle_normd, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
     vk::Event evt_w2 = ctx->matmul_add_inplace(ctx->current_thought, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
     return evt_w2;
+}
+
+void llava_layer::freeze_storage() {
+    layer_allocation->freeze();
+    layer_cache_allocation->freeze();
 }
