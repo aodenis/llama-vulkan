@@ -10,6 +10,7 @@ public:
     ~llava_layer();
     vk::Event execute(llava_context* ctx, vk::Event last_event);
     void freeze_storage();
+    void load_from_disk();
 
 private:
     llava_device_memory* layer_allocation;

@@ -62,3 +62,15 @@ void llava_layer::freeze_storage() {
     layer_allocation->freeze();
     layer_cache_allocation->freeze();
 }
+
+void llava_layer::load_from_disk() {
+    attention_wq->load_from_disk();
+    attention_wk->load_from_disk();
+    attention_wv->load_from_disk();
+    attention_wo->load_from_disk();
+    feed_forward_w1->load_from_disk();
+    feed_forward_w2->load_from_disk();
+    feed_forward_w3->load_from_disk();
+    attention_norm->load_from_disk();
+    ffn_norm->load_from_disk();
+}

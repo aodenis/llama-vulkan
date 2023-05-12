@@ -311,6 +311,10 @@ int llava_context::run(int argc, char **argv) {
         layer.freeze_storage();
     }
 
+    for(auto& layer : layers) {
+        layer.load_from_disk();
+    }
+
     record_execution(nullptr);
     u32 eos_id = 2;
     uint32_t next_token;
@@ -414,14 +418,14 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
 }
 
 u32 llava_context::get_last_predicted_token() const {
-    auto* res = static_cast<float *>(device.mapMemory(output_probs->device_memory->device_memory, output_probs->get_sub_buffers().front().offset + (batch_size - 1) * model->header.vocab_size * sizeof(float), model->header.vocab_size * sizeof(float)));
+    auto* res = static_cast<float *>(output_probs->map(0, (batch_size - 1) * model->header.vocab_size * sizeof(float), model->header.vocab_size * sizeof(float)));
     u32 best = 0;
     for(uint32_t i = 1; i < model->header.vocab_size; ++i) {
         if (res[i] > res[best]) {
             best = i;
         }
     }
-    device.unmapMemory(output_probs->device_memory->device_memory);
+    output_probs->unmap();
     return best;
 }
 
@@ -619,6 +623,8 @@ void llava_context::recreate_buffers() {
     output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
     output_probs = new llava_buffer(this, ggml_value_type::f32, vocab_size, batch_size, main_buffer_memory);
     main_buffer_memory->freeze();
+    norm_w->load_from_disk();
+    output_w->load_from_disk();
 }
 
 void llava_context::reset_main_buffers() {

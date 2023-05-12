@@ -84,24 +84,27 @@ void llava_buffer::on_memory_freeze() {
     buffers_bound = true;
 
     for (buffer_record_t& buffer : buffers) {
-        context->get_device().bindBufferMemory(buffer.buffer, device_memory->device_memory, buffer.offset);
+        context->get_device().bindBufferMemory(buffer.buffer, device_memory->get_device_memory(), buffer.offset);
     }
+}
 
+void llava_buffer::load_from_disk() {
     if (backing_buffer_name.empty()) {
         return;
     }
+    assert(is_allocated());
 
     auto& table = context->get_model()->get_buffer_descriptor(backing_buffer_name);
     if (type == ggml_value_type::f32) {
-        memcpy(context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset, table.size), context->get_model()->mapping + table.offset, (size_t) table.size);
-        context->get_device().unmapMemory(device_memory->device_memory);
+        memcpy(map(), context->get_model()->mapping + table.offset, (size_t) table.size);
+        unmap();
     } else if (type == ggml_value_type::q4_0) {
         u32 column_count = shape.second;
         uint32_t* raw_data = reinterpret_cast<uint32_t *>(context->get_model()->mapping + table.offset);
         size_t block_count = (shape.first * shape.second) / 32;
 
         {
-            auto* d_data = static_cast<uint32_t *>(context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset, buffers.front().size));
+            auto* d_data = static_cast<uint32_t *>(map(0));
             for (size_t i = 0; i < block_count; ++i) {
                 uint32_t row_id = i / (column_count / 32);
                 uint32_t column_id = i % (column_count / 32);
@@ -109,11 +112,11 @@ void llava_buffer::on_memory_freeze() {
                 u32 fpsid = row_id & 3;
                 d_data[fpid * 4 * (column_count / 32) + 4 * column_id + fpsid] = raw_data[5 * i];
             }
-            context->get_device().unmapMemory(device_memory->device_memory);
+            unmap();
         }
 
         {
-            auto* q_data = static_cast<uint32_t *>(context->get_device().mapMemory(device_memory->device_memory, buffers.back().offset, buffers.back().size));
+            auto* q_data = static_cast<uint32_t *>(map(1));
             for (size_t i = 0; i < block_count; ++i) {
                 uint32_t row_id = i / (column_count / 32);
                 uint32_t column_id = i % (column_count / 32);
@@ -124,7 +127,7 @@ void llava_buffer::on_memory_freeze() {
                     q_data[fpid * 4 * (column_count / 32) * 4 + 4 * 4 * column_id + 4 * sub_block_id + fpsid] = raw_data[5 * i + 1 + sub_block_id];
                 }
             }
-            context->get_device().unmapMemory(device_memory->device_memory);
+            unmap();
         }
     } else {
         assert(false);
@@ -154,7 +157,7 @@ void llava_buffer::write_f32(const void *in_buf, ggml_value_type input_type, u32
     assert ((f32_offset + f32_count) <= (shape.first * shape.second));
     if (input_type == ggml_value_type::q4_0) {
         assert((f32_count % 32) == 0);
-        auto* data = (float*)(context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset + 4 * f32_offset, 4 * f32_count));
+        auto* data = (float*)(map(0, 4 * f32_offset, 4 * f32_count));
 
         for (u32 i = 0; i < f32_count / 32; i++) {
             float d = ((float const*)in_buf)[5 * i];
@@ -166,12 +169,12 @@ void llava_buffer::write_f32(const void *in_buf, ggml_value_type input_type, u32
             }
         }
 
-        context->get_device().unmapMemory(device_memory->device_memory);
+        unmap();
         return;
     } else if (input_type == ggml_value_type::f32) {
-        void* data = context->get_device().mapMemory(device_memory->device_memory, buffers.front().offset + 4 * f32_offset, 4 * f32_count);
+        void* data = map(0, 4 * f32_offset, 4 * f32_count);
         memcpy(data, in_buf, 4 * f32_count);
-        context->get_device().unmapMemory(device_memory->device_memory);
+        unmap();
         return;
     }
 }
@@ -239,4 +242,17 @@ bool llava_buffer::contains_nan() const {
 
 buffer_record_t::buffer_record_t(size_t _size, size_t _offset, vk::Buffer _buffer) : size(_size), offset(_offset), buffer(_buffer) {
 
+}
+
+void *llava_buffer::map(u32 index, u32 offset, u32 size) const {
+    auto const& buffer = buffers.at(index);
+    assert (offset <= buffer.size);
+    if (size > buffer.size - offset) {
+        size = buffer.size - offset;
+    }
+    return context->get_device().mapMemory(device_memory->get_device_memory(), buffer.offset + offset, size);
+}
+
+void llava_buffer::unmap() const {
+    return context->get_device().unmapMemory(device_memory->get_device_memory());
 }
