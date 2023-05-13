@@ -209,7 +209,7 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
     } else {
 #ifdef RUNTIME_BUILD_ENABLED
         vector<string> little_source_paths;
-        little_source_paths.emplace_back(shader_name + ".glsl");
+        little_source_paths.emplace_back(shader_name + ".comp");
 
         vector<vector<char>> shader_sources;
         shader_sources.reserve(little_source_paths.size());
