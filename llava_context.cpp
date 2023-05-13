@@ -130,6 +130,11 @@ u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical
 u32 llava_context::find_suitable_queue_index() {
     vector<vk::QueueFamilyProperties> queueFamilyProperties = physical_device.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+        if ((queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) and ((queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eGraphics) != vk::QueueFlagBits::eGraphics)) {
+            return i;
+        }
+    }
+    for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
         if (queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) {
             return i;
         }
@@ -209,12 +214,19 @@ int llava_context::run(int argc, char **argv) {
     // create an Instance
     vulkan_instance = vk::createInstance({{}, &applicationInfo, enabled_layers});
     physical_device = find_suitable_physical_device();
+    if (verbosity) {
+        cout << "Selected device: " << physical_device.getProperties().deviceName << endl;
+    }
 
     queueFamilyIndex = find_suitable_queue_index();
     if (!~queueFamilyIndex) {
         cerr << "[!] No compute queue family found on selected device" << endl;
         return 1;
     }
+    if (verbosity >= 2) {
+        cout << "Selected queue: " << queueFamilyIndex << endl;
+    }
+
 
     mainMemoryTypeIndex = find_suitable_memory_type(physical_device);
     if (!~mainMemoryTypeIndex) {
@@ -224,9 +236,6 @@ int llava_context::run(int argc, char **argv) {
 
     this->workgroup_size = physical_device.getProperties().limits.maxComputeWorkGroupInvocations;
     ulog2(this->workgroup_size); // Assert it is a pow2
-    if (verbosity) {
-        cout << "Selected device: " << physical_device.getProperties().deviceName << endl;
-    }
 
     // create a Device
     float queuePriority = 0.0f;

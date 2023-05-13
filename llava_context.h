@@ -53,8 +53,8 @@ public:
     vk::PhysicalDevice& get_physical_device();
     [[nodiscard]] uint32_t get_queue_family_index() const;
     shared_ptr<ggml_file> get_model();
-    specialization_variables_t const& get_spevar_struct() const;
-    list<llava_layer> const& get_layers() const;
+    [[nodiscard]] specialization_variables_t const& get_spevar_struct() const;
+    [[nodiscard]] list<llava_layer> const& get_layers() const;
 
 public:
     llava_pipeline* get_pipeline(const string& shader_name, u32 argcount);
