@@ -8,7 +8,7 @@ class llava_layer {
 public:
     llava_layer(llava_context* context, u32 layer_id);
     ~llava_layer();
-    vk::Event execute(llava_context* ctx, vk::Event last_event);
+    vk::Event execute(llava_command_buffer* cmd_buf, vk::Event last_event) const;
     void freeze_storage();
     void load_from_disk();
 

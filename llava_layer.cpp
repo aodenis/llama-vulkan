@@ -2,6 +2,7 @@
 #include "llava_buffer.h"
 #include "llava_layer.h"
 #include "llava_device_memory.h"
+#include "llava_command_buffer.h"
 #include "llava_context.h"
 
 llava_layer::llava_layer(llava_context *context, u32 layer_id) {
@@ -37,24 +38,25 @@ llava_layer::~llava_layer() {
     delete layer_cache_allocation;
 }
 
-vk::Event llava_layer::execute(llava_context *ctx, vk::Event event) {
-    vk::Event evt_norm = ctx->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, attention_norm, {event});
-    vk::Event evtQ = ctx->matmul(ctx->current_Q, attention_wq, ctx->current_thought_sublayer, {evt_norm});
-    vk::Event evtK = ctx->matmul(ctx->current_K, attention_wk, ctx->current_thought_sublayer, {evt_norm});
-    vk::Event evtRoPEQ = ctx->rope(ctx->current_Q, {evtQ});
-    vk::Event evtRoPEK = ctx->rope(ctx->current_K, {evtK});
+vk::Event llava_layer::execute(llava_command_buffer *cmd_buf, vk::Event event) const {
+    llava_context *ctx = cmd_buf->context;
+    vk::Event evt_norm = cmd_buf->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, attention_norm, {event});
+    vk::Event evtQ = cmd_buf->matmul(ctx->current_Q, attention_wq, ctx->current_thought_sublayer, {evt_norm});
+    vk::Event evtK = cmd_buf->matmul(ctx->current_K, attention_wk, ctx->current_thought_sublayer, {evt_norm});
+    vk::Event evtRoPEQ = cmd_buf->rope(ctx->current_Q, {evtQ});
+    vk::Event evtRoPEK = cmd_buf->rope(ctx->current_K, {evtK});
 
-    vk::Event evtKc = ctx->kv_copy(k_cache, ctx->current_K, {evtRoPEK});
-    vk::Event evtSA = ctx->multi_head_attention(ctx->attn_result, k_cache, ctx->current_Q, {evtRoPEQ, evtKc});
-    vk::Event evtSoftmax = ctx->inplace_softmax(ctx->attn_result, {evtSA});
-    vk::Event evtV = ctx->matmul(ctx->current_V, attention_wv, ctx->current_thought_sublayer, {evt_norm});
-    vk::Event evtVc = ctx->kv_copy(v_cache, ctx->current_V, {evtV});
+    vk::Event evtKc = cmd_buf->kv_copy(k_cache, ctx->current_K, {evtRoPEK});
+    vk::Event evtSA = cmd_buf->multi_head_attention(ctx->attn_result, k_cache, ctx->current_Q, {evtRoPEQ, evtKc});
+    vk::Event evtSoftmax = cmd_buf->inplace_softmax(ctx->attn_result, {evtSA});
+    vk::Event evtV = cmd_buf->matmul(ctx->current_V, attention_wv, ctx->current_thought_sublayer, {evt_norm});
+    vk::Event evtVc = cmd_buf->kv_copy(v_cache, ctx->current_V, {evtV});
 
-    vk::Event evtKQV = ctx->perform_kqv_matching(ctx->current_Vout, v_cache, ctx->attn_result, {evtSoftmax, evtVc});
-    vk::Event evtSA_out = ctx->matmul_add_inplace(ctx->current_thought, attention_wo, ctx->current_Vout, {evtKQV});
-    vk::Event evt_norm_ff = ctx->normalize_logit(ctx->current_thought_middle_normd, ctx->current_thought, ffn_norm, {evtSA_out});
-    vk::Event evt_w13 = ctx->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_middle_normd, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
-    vk::Event evt_w2 = ctx->matmul_add_inplace(ctx->current_thought, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
+    vk::Event evtKQV = cmd_buf->perform_kqv_matching(ctx->current_Vout, v_cache, ctx->attn_result, {evtSoftmax, evtVc});
+    vk::Event evtSA_out = cmd_buf->matmul_add_inplace(ctx->current_thought, attention_wo, ctx->current_Vout, {evtKQV});
+    vk::Event evt_norm_ff = cmd_buf->normalize_logit(ctx->current_thought_middle_normd, ctx->current_thought, ffn_norm, {evtSA_out});
+    vk::Event evt_w13 = cmd_buf->matmul_silu_ff(ctx->properties_associated_values, feed_forward_w3, feed_forward_w1, ctx->current_thought_middle_normd, {evt_norm_ff}); // This operation takes forever to complete, TODO optimize it
+    vk::Event evt_w2 = cmd_buf->matmul_add_inplace(ctx->current_thought, feed_forward_w2, ctx->properties_associated_values, {evt_w13}); // This operation takes forever to complete, TODO optimize it
     return evt_w2;
 }
 

@@ -3,6 +3,7 @@
 #include "llava_buffer.h"
 #include "llava_device_memory.h"
 #include "llava_layer.h"
+#include "llava_command_buffer.h"
 #include "utils.h"
 #include <iostream>
 #include <chrono>
@@ -57,7 +58,8 @@ vk::PhysicalDevice& llava_context::get_physical_device() {
 }
 
 llava_context::~llava_context() {
-    reset_command_buffer();
+    delete command_buffer;
+    command_buffer = nullptr;
     named_pipelines.clear();
     layers.clear();
     reset_main_buffers();
@@ -315,7 +317,6 @@ int llava_context::run(int argc, char **argv) {
         layer.load_from_disk();
     }
 
-    record_execution(nullptr);
     u32 eos_id = 2;
     uint32_t next_token;
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -389,10 +390,11 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
     if (token_ids.size() != batch_size) {
         set_batch_size(token_ids.size());
     }
-    if (command_buffer.empty()) {
-        record_execution(nullptr);
+    if (command_buffer == nullptr) {
+        command_buffer = new llava_command_buffer(this);
+        command_buffer->record_execution();
     } else {
-        reset_command_buffer_events();
+        command_buffer->reset_events();
     }
 
     ggml_data_descriptor const& descriptor = model->get_buffer_descriptor("tok_embeddings");
@@ -409,8 +411,7 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
         .dim = model->header.dim,
     };
     config_buffer->write_full(&config, ggml_value_type::f32);
-    vk::SubmitInfo submitInfo({}, {}, command_buffer_raw, {});
-    queue.submit(submitInfo);
+    command_buffer->run();
     for (u32 token_id : token_ids) {
         tokens.push_back(token_id);
     }
@@ -427,126 +428,6 @@ u32 llava_context::get_last_predicted_token() const {
     }
     output_probs->unmap();
     return best;
-}
-
-vk::Event llava_context::normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events) {
-    return record_command("normalize", {outbuf, inbuf, weights}, events, 1, 1, batch_size);
-}
-
-vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(inbuf->shape.first == matrix->shape.second);
-    assert(outbuf->shape.first == matrix->shape.first);
-    assert(inbuf->shape.second == batch_size);
-    assert(outbuf->shape.second == batch_size);
-
-    if (inbuf->shape.first == model->header.dim) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-        return record_command("matmul_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4), 1, batch_size);
-    } else if (inbuf->shape.first == model->ff_size) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
-        return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4), 1, batch_size);
-    } else {
-        assert(false);
-    }
-}
-
-vk::Event llava_context::matmul_add_inplace(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(inbuf->shape.first == matrix->shape.second);
-    assert(outbuf->shape.first == matrix->shape.first);
-    assert(inbuf->shape.second == batch_size);
-    assert(outbuf->shape.second == batch_size);
-
-    if (inbuf->shape.first == model->header.dim) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-        return record_command("matmul_add_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4), 1, batch_size);
-    } else if (inbuf->shape.first == model->ff_size) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
-        return record_command("matmul_add_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4), 1, batch_size);
-    } else {
-        assert(false);
-    }
-}
-
-vk::Event llava_context::matmul_silu_ff(llava_buffer* outbuf, llava_buffer* w3_matrix, llava_buffer* w1_matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(w3_matrix->shape == w1_matrix->shape);
-    assert(inbuf->shape.second == batch_size);
-    assert(outbuf->shape.second == batch_size);
-    assert(inbuf->shape.first == model->header.dim);
-    assert(outbuf->shape.first == model->ff_size);
-
-    assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-    return record_command("matmul_silu_ff", {outbuf, w3_matrix, w1_matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4), 1, batch_size);
-}
-
-vk::Event llava_context::kv_copy(llava_buffer* out_cache, llava_buffer* input_line, initializer_list<vk::Event> events) {
-    assert(out_cache->shape.first == backlog_size);
-    assert(out_cache->shape.second == model->header.dim);
-    assert(input_line->shape.first == model->header.dim);
-    assert(input_line->shape.second == batch_size);
-    return record_command("copy_to_cache", {config_buffer, out_cache, input_line}, events, model->header.dim, 1, batch_size);
-}
-
-vk::Event llava_context::multi_head_attention(llava_buffer* out_buffer, llava_buffer* cache_buffer, llava_buffer* query, initializer_list<vk::Event> events) {
-    assert(cache_buffer->shape.first == backlog_size);
-    assert(cache_buffer->shape.second == model->header.dim);
-
-    assert(query->shape.first == model->header.dim);
-    assert(query->shape.second == batch_size);
-
-    assert(out_buffer->shape.first == backlog_size);
-    assert(out_buffer->shape.second == model->header.n_heads * batch_size);
-
-    return record_command("mhsa", {out_buffer, cache_buffer, query}, events, updiv(model->header.n_heads * backlog_size, workgroup_size), 1, batch_size);
-}
-
-vk::Event llava_context::inplace_softmax(llava_buffer* inout_buffer, initializer_list<vk::Event> events) {
-    assert(inout_buffer->shape.first == backlog_size);
-    assert(inout_buffer->shape.second == model->header.n_heads * batch_size);
-
-    return record_command("softmax", {config_buffer, inout_buffer}, events, updiv(model->header.n_heads, specialization_variables.softmax_head_per_wavefront), 1, batch_size);
-}
-
-vk::Event llava_context::add(llava_buffer* buf, llava_buffer* delta_buf, initializer_list<vk::Event> events) {
-    return record_command("add_logits", {buf, delta_buf}, events, updiv(model->header.dim, workgroup_size), 1, batch_size);
-}
-
-vk::Event llava_context::rope(llava_buffer* buf, initializer_list<vk::Event> events) {
-    assert((model->header.rot % 2) == 0);
-    return record_command("rope", {config_buffer, buf}, events, updiv(buf->shape.first / 2, workgroup_size), 1, batch_size);
-}
-
-vk::Event llava_context::perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out, initializer_list<vk::Event> events) {
-    assert(v_out and v_cache and softmax_out);
-
-    assert(v_out->shape.first == model->header.dim);
-    assert(v_out->shape.second == batch_size);
-
-    assert(v_cache->shape.first == backlog_size);
-    assert(v_cache->shape.second == model->header.dim);
-
-    assert(softmax_out->shape.first == backlog_size);
-    assert(softmax_out->shape.second == model->header.n_heads * batch_size);
-
-    return record_command("kqv_matching", {v_out, v_cache, softmax_out}, events, updiv(model->header.dim, specialization_variables.softmax_head_per_wavefront), 1, batch_size);
-}
-
-vk::Event llava_context::record_command(llava_pipeline *pipeline,
-                                      const initializer_list<llava_buffer *> &buffers,
-                                      const initializer_list<vk::Event> &events,
-                                      uint32_t countX,
-                                      uint32_t countY,
-                                      uint32_t countZ) {
-    return command_buffer.emplace_back(pipeline, buffers, events, countX, countY, countZ).completionEvent;
-}
-
-vk::Event llava_context::record_command(const string &pipeline_name, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY,
-                                      uint32_t countZ) {
-    u32 buffer_count = 0;
-    for(llava_buffer * buffer : buffers) {
-        buffer_count += buffer->get_sub_buffers().size();
-    }
-    auto* pipeline = get_pipeline(pipeline_name, buffer_count);
-    return record_command(pipeline, buffers, events, countX, countY, countZ);
 }
 
 string llava_context::generate_spevar_define_string() const {
@@ -574,22 +455,13 @@ string llava_context::generate_spevar_define_string() const {
     return ss.str();
 }
 
-void llava_context::reset_command_buffer_events() {
-    for (auto& x : command_buffer) {
-        device.resetEvent(x.completionEvent);
-    }
-}
-
-void llava_context::reset_command_buffer() {
-    command_buffer_raw.clear();
-    command_buffer.clear();
-}
 
 void llava_context::set_batch_size(u32 _batch_size) {
     if (batch_size == _batch_size) {
         return;
     }
-    reset_command_buffer();
+    delete command_buffer;
+    command_buffer = nullptr;
     batch_size = _batch_size;
 
     recreate_buffers();
@@ -660,19 +532,15 @@ void llava_context::reset_main_buffers() {
     main_buffer_memory = nullptr;
 }
 
-vk::Event llava_context::record_execution(vk::Event startEvent) {
-    reset_command_buffer();
+vk::Queue &llava_context::get_queue() {
+    assert(queue);
+    return queue;
+}
 
-    for (auto& layer : layers) {
-        startEvent = layer.execute(this, {startEvent});
-    }
+specialization_variables_t const &llava_context::get_spevar_struct() const {
+    return specialization_variables;
+}
 
-    startEvent = normalize_logit(current_thought_sublayer, current_thought, norm_w, {startEvent});
-    startEvent = matmul(output_probs, output_w, current_thought_sublayer, {startEvent});
-
-    command_buffer_raw.reserve(command_buffer.size());
-    for (auto& command : command_buffer) {
-        command_buffer_raw.push_back(command.commandBuffer);
-    }
-    return startEvent;
+list<llava_layer> const& llava_context::get_layers() const {
+    return layers;
 }

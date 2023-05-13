@@ -66,6 +66,7 @@ class ggml_file {
     friend class llava_context;
     friend class llava_buffer;
     friend class llava_layer;
+    friend class llava_command_buffer;
 public:
     ggml_file(const char* filepath);
     ~ggml_file();
