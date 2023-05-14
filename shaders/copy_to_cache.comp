@@ -4,16 +4,16 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer readonly ConfigBuffer {
+layout (binding = 0) buffer writeonly CacheBuffer {
+     float values[];
+} cache;
+
+layout (binding = 1) buffer readonly ConfigBuffer {
     uint token_count;
     uint pad0;
     uint pad1;
     uint pad2;
 } config;
-
-layout (binding = 1) buffer writeonly CacheBuffer {
-     float values[];
-} cache;
 
 layout (binding = 2) buffer readonly InputBuffer {
      float values[DIM];

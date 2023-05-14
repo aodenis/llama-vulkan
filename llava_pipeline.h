@@ -8,7 +8,7 @@
 // A dumb wrapper around vulkan nightmarish Pipeline/PipelineLayout/DescriptorSet/whatever
 class llava_pipeline {
     friend class llava_context;
-    friend class llava_command;
+    friend class llava_command_buffer;
 public:
     llava_pipeline(llava_context* ctx, string  shader_name, bool use_prebuilt_shader, uint32_t argument_count);
     ~llava_pipeline();

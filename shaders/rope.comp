@@ -4,16 +4,16 @@
 
 #include "common.glsl"
 
-layout (binding = 0) buffer readonly ConfigBuffer {
+layout (binding = 0) buffer CacheBuffer {
+     float values[]; // [Z][DIM]
+} inp;
+
+layout (binding = 1) buffer readonly ConfigBuffer {
     uint token_count;
     uint pad0;
     uint pad1;
     uint pad2;
 } config;
-
-layout (binding = 1) buffer CacheBuffer {
-     float values[]; // [Z][DIM]
-} inp;
 
 #ifdef USE_SPEVAR
 layout (local_size_x_id = MAX_WGS_CID, local_size_y = 1, local_size_z = 1) in;

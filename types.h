@@ -7,7 +7,6 @@
 
 using namespace std;
 
-class llava_command;
 class llava_context;
 class llava_pipeline;
 class llava_layer;

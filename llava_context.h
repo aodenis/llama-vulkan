@@ -6,7 +6,6 @@
 #include <memory>
 #include <map>
 #include <list>
-#include "llava_command.h"
 #include "llava_layer.h"
 #include "llava_buffer.h"
 #include "llava_pipeline.h"
@@ -35,7 +34,6 @@ struct specialization_variables_t {
 };
 
 class llava_context {
-    friend class llava_command;
     friend class llava_command_buffer;
     friend class llava_pipeline;
     friend class llava_layer;
@@ -52,7 +50,7 @@ public:
     vk::PipelineCache& get_pipeline_cache();
     vk::PhysicalDevice& get_physical_device();
     [[nodiscard]] uint32_t get_queue_family_index() const;
-    shared_ptr<ggml_file> get_model();
+    [[nodiscard]] shared_ptr<ggml_file> get_model() const;
     [[nodiscard]] specialization_variables_t const& get_spevar_struct() const;
     [[nodiscard]] list<llava_layer> const& get_layers() const;
 

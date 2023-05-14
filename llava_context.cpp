@@ -379,8 +379,8 @@ vk::PipelineCache& llava_context::get_pipeline_cache() {
     return pipeline_cache;
 }
 
-shared_ptr<ggml_file> llava_context::get_model() {
-    assert(model != nullptr);
+shared_ptr<ggml_file> llava_context::get_model() const {
+    assert(model);
     return model;
 }
 
