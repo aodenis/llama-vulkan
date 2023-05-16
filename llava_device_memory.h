@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.hpp>
 #include <vector>
 #include <set>
+#include <atomic>
 
 class llava_device_memory {
 public:
@@ -19,6 +20,14 @@ public:
     llava_context* const context;
     vk::DeviceMemory const& get_device_memory();
     void join_memory_pool(llava_device_memory *new_pool_master);
+    void* map();
+    void unmap();
+    size_t get_size() const;
+    bool is_part_of_pool() const;
+    llava_device_memory const* get_fallback() const;
+
+public:
+    u64 const object_id;
 
 private:
     vk::DeviceMemory device_memory;
@@ -26,6 +35,9 @@ private:
     set<llava_buffer*> buffers;
     llava_device_memory* fallback = nullptr;
     set<llava_device_memory*> pool_friends;
+
+private:
+    static atomic<u64> object_count;
 };
 
 #endif

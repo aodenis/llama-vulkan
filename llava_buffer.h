@@ -32,9 +32,10 @@ public:
     void fill_f32(float value) const;
     bool contains_nan() const;
     void on_memory_freeze();
-    void* map(u32 index = 0, u32 offset = 0, u32 size = ~0U) const;
+    [[nodiscard]] void* map(u32 index = 0, u32 offset = 0, u32 size = ~0U) const;
     void unmap() const;
-    void load_from_disk();
+    void load_from_disk(void* target_buffer);
+    void load_to_gpu();
 
 public:
     llava_context* const context;

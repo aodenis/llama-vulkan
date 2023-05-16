@@ -4,13 +4,27 @@
 #include "types.h"
 
 class llava_layer {
-    friend class llava_context;
 public:
     llava_layer(llava_context* context, u32 layer_id);
+    llava_layer(llava_layer const&) = delete;
+    llava_layer(llava_layer&) = delete;
+    llava_layer(llava_layer&&) noexcept;
     ~llava_layer();
     void execute(llava_command_buffer* cmd_buf) const;
     void freeze_storage();
-    void load_from_disk();
+    void freeze_cache_storage();
+    [[nodiscard]] bool is_layer_data_offloaded() const;
+    void load_to_host();
+    void load_to_gpu();
+    void set_offload(u32 other_layer);
+
+public:
+    [[nodiscard]] bool is_offload_main_layer() const;
+    [[nodiscard]] u32 get_offload_id() const;
+
+public:
+    u32 const layer_id;
+    llava_context* const context;
 
 private:
     llava_device_memory* layer_allocation;
@@ -26,6 +40,11 @@ private:
     llava_buffer* ffn_norm;
     llava_buffer* k_cache;
     llava_buffer* v_cache;
+
+private:
+    u8* raw_layer = nullptr;
+    u32 offload_layer_id;
+    bool is_offloaded = false;
 };
 
-#endif //VULKAN_LLAMA_LLAVA_LAYER_H
+#endif

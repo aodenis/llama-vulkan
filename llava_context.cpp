@@ -16,13 +16,6 @@
 #include <glslang/Public/ShaderLang.h>
 #endif
 
-struct shared_state {
-    u32 token_count;
-    u32 dim;
-    u32 pad1;
-    u32 pad2;
-};
-
 vk::PhysicalDevice llava_context::find_suitable_physical_device() {
     auto physical_devices = vulkan_instance.enumeratePhysicalDevices();
     for (vk::PhysicalDevice const &pd : physical_devices) {
@@ -312,18 +305,27 @@ int llava_context::run(int argc, char **argv) {
         exit(-1);
     }
 
+    layers.reserve(model->header.n_layers); // TODO layers should be able to move...
     for (u32 i = 0; i < model->header.n_layers; ++i) {
         layers.emplace_back(this, i);
     }
 
     set_batch_size(dec_tokens.size());
 
-    for(auto& layer : layers) {
-        layer.freeze_storage();
-    }
+    offload_layer(5, 15);
 
-    for(auto& layer : layers) {
-        layer.load_from_disk();
+    for (auto& layer : layers) {
+        layer.freeze_cache_storage();
+        if (not layer.is_layer_data_offloaded()) {
+            layer.freeze_storage();
+            layer.load_to_gpu();
+        } else if (layer.is_offload_main_layer()) {
+            layer.freeze_storage();
+            layer.load_to_host();
+            layer.load_to_gpu();
+        } else {
+            layer.load_to_host();
+        }
     }
 
     u32 eos_id = 2;
@@ -384,14 +386,14 @@ shared_ptr<ggml_file> llava_context::get_model() const {
     return model;
 }
 
-llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argcount) {
+llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argument_count) {
     auto it = named_pipelines.find(shader_name);
     if (it != named_pipelines.end()) {
-        assert (it->second.argcount == argcount);
+        assert (it->second.argument_count == argument_count);
         return &it->second;
     }
 
-    it = named_pipelines.emplace(std::piecewise_construct, forward_as_tuple(shader_name), forward_as_tuple(this, shader_name, use_prebuilt_shaders, argcount)).first;
+    it = named_pipelines.emplace(std::piecewise_construct, forward_as_tuple(shader_name), forward_as_tuple(this, shader_name, use_prebuilt_shaders, argument_count)).first;
     return &it->second;
 }
 
@@ -402,8 +404,6 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
     if (command_buffer == nullptr) {
         command_buffer = new llava_command_buffer(this);
         command_buffer->record_execution();
-    } else {
-        command_buffer->reset_events();
     }
 
     ggml_data_descriptor const& descriptor = model->get_buffer_descriptor("tok_embeddings");
@@ -415,10 +415,7 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
         assert(token_id < model->tokens.size());
         current_thought->write_f32(model->mapping + (descriptor.offset + token_id * (descriptor.size / model->tokens.size())), descriptor.ftype, i * model->header.dim, model->header.dim);
     }
-    shared_state config {
-        .token_count = static_cast<u32>(tokens.size()),
-        .dim = model->header.dim,
-    };
+    u32 config[4] = {static_cast<u32>(tokens.size())};
     config_buffer->write_full(&config, ggml_value_type::f32);
     command_buffer->run();
     for (u32 token_id : token_ids) {
@@ -497,15 +494,15 @@ void llava_context::recreate_buffers() {
     current_Q = new llava_buffer(this, ggml_value_type::f32, dim, batch_size, main_buffer_memory);
     current_K = new llava_buffer(this, ggml_value_type::f32, dim, batch_size, main_buffer_memory);
     attn_result = new llava_buffer(this, ggml_value_type::f32, backlog_size, n_heads * batch_size, main_buffer_memory);
-    config_buffer = new llava_buffer(this, ggml_value_type::f32, sizeof(shared_state) / sizeof(float), batch_size, main_buffer_memory);
+    config_buffer = new llava_buffer(this, ggml_value_type::f32, 4, batch_size, main_buffer_memory);
     current_V = new llava_buffer(this, ggml_value_type::f32, dim, batch_size, main_buffer_memory);
     current_Vout = new llava_buffer(this, ggml_value_type::f32, dim, batch_size, main_buffer_memory);
     norm_w = new llava_buffer(this, model->get_buffer_descriptor("norm"), main_buffer_memory);
     output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
     output_probs = new llava_buffer(this, ggml_value_type::f32, vocab_size, batch_size, main_buffer_memory);
     main_buffer_memory->freeze();
-    norm_w->load_from_disk();
-    output_w->load_from_disk();
+    norm_w->load_to_gpu();
+    output_w->load_to_gpu();
 }
 
 void llava_context::reset_main_buffers() {
@@ -550,6 +547,33 @@ specialization_variables_t const &llava_context::get_spevar_struct() const {
     return specialization_variables;
 }
 
-list<llava_layer> const& llava_context::get_layers() const {
+vector<llava_layer>& llava_context::get_layers() {
     return layers;
+}
+
+void llava_context::offload_layer(u32 layer1, u32 layer2) {
+    while (layers.at(layer1).get_offload_id() != layer1) {
+        layer1 = layers.at(layer1).get_offload_id();
+    }
+    while (layers.at(layer2).get_offload_id() != layer2) {
+        layer2 = layers.at(layer2).get_offload_id();
+    }
+    if (layer1 == layer2) {
+        return; // Already together
+    }
+    set<u32> offload_layers;
+    offload_layers.insert(layer1);
+    offload_layers.insert(layer2);
+    for (u32 i = 0; i < layers.size(); ++i) {
+        if (offload_layers.contains(layers.at(i).get_offload_id())) {
+            offload_layers.insert(i);
+        }
+    }
+    u32 new_base = *offload_layers.begin();
+    assert(new_base == layer1);
+    if (offload_layers.size() > 1) {
+        for (auto& x : offload_layers) {
+            layers.at(x).set_offload(new_base);
+        }
+    }
 }

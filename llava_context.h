@@ -4,6 +4,7 @@
 #include "ggml_file.h"
 #include "types.h"
 #include <memory>
+#include <set>
 #include <map>
 #include <list>
 #include "llava_layer.h"
@@ -52,10 +53,10 @@ public:
     [[nodiscard]] uint32_t get_queue_family_index() const;
     [[nodiscard]] shared_ptr<ggml_file> get_model() const;
     [[nodiscard]] specialization_variables_t const& get_spevar_struct() const;
-    [[nodiscard]] list<llava_layer> const& get_layers() const;
+    [[nodiscard]] vector<llava_layer>& get_layers();
 
 public:
-    llava_pipeline* get_pipeline(const string& shader_name, u32 argcount);
+    llava_pipeline* get_pipeline(const string& shader_name, u32 argument_count);
 
 public:
     u32 backlog_size = 128;
@@ -81,7 +82,7 @@ private:
     u32 queueFamilyIndex = ~0U;
     u32 verbosity = 0;
 
-    list<llava_layer> layers;
+    vector<llava_layer> layers;
     void process_tokens(vector<u32> const& token_ids);
     vector<u32> tokens;
     [[nodiscard]] u32 get_last_predicted_token() const;
@@ -114,6 +115,7 @@ private:
     u32 find_suitable_memory_type(const vk::PhysicalDevice &_physical_device);
     u32 find_suitable_queue_index();
     vk::PhysicalDevice find_suitable_physical_device();
+    vector<set<u32>> offloads;
 
 private:
     void reset_main_buffers();
@@ -121,6 +123,9 @@ private:
 private: // command buffer management
     void set_batch_size(u32 _batch_size);
     void recreate_buffers();
+
+private:
+    void offload_layer(u32 layer1, u32 layer2);
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H

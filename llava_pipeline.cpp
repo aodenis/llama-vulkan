@@ -183,7 +183,7 @@ static TBuiltInResource default_resources(llava_context* ctx)
 llava_pipeline::llava_pipeline(llava_context* ctx,
                                string _shader_name,
                                bool use_prebuilt_shaders,
-                               uint32_t argument_count) : argcount(argument_count),
+                               uint32_t argument_count) : argument_count(argument_count),
                                                           context(ctx),
                                                           shader_name(std::move(_shader_name)) {
     vector<vk::DescriptorSetLayoutBinding> bindings;

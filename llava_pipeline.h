@@ -14,7 +14,7 @@ public:
     ~llava_pipeline();
 
 public:
-    const u32 argcount;
+    const u32 argument_count;
     llava_context* const context;
     const string shader_name;
 

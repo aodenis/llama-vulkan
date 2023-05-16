@@ -5,6 +5,10 @@
 #include <list>
 #include <vulkan/vulkan.hpp>
 #include <map>
+#include <thread>
+#include <condition_variable>
+
+struct worker_task;
 
 class llava_wrapped_command {
 public:
@@ -20,13 +24,11 @@ public:
 };
 
 class llava_command_buffer {
-public:
-
+    friend void offload_worker(llava_command_buffer *cmd_buf, worker_task* task);
 public:
     explicit llava_command_buffer(llava_context *context);
     ~llava_command_buffer();
     void record_execution();
-    void reset_events();
     void run();
     void normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights);
     void matmul(llava_buffer* outbuf, llava_buffer*, llava_buffer*);
@@ -49,10 +51,21 @@ public:
 private: // command buffer stuff
     list<llava_wrapped_command> command_buffer;
     vector<vk::CommandBuffer> command_buffer_raw;
+    vector<vk::Event> layer_load_done_events;
+    vector<vk::Event> layer_process_done_events;
+    u32 current_layer = ~0U;
+
+private: // offload
+    vector<thread> offload_threads;
+    mutex offload_mutex;
+    condition_variable offload_cv;
+    atomic_bool thread_end_flag;
 
 private:
     map<llava_buffer*, vk::Event> buffer_to_last_write_event;
-    map<llava_buffer*, vk::Event> layer_buffer_to_layer_write_event;
+
+private:
+    void reset();
 };
 
 #endif

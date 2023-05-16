@@ -1,5 +1,3 @@
-#include <iostream>
-#include <utility>
 #include <cmath>
 #include "llava_buffer.h"
 #include "llava_device_memory.h"
@@ -88,7 +86,8 @@ void llava_buffer::on_memory_freeze() {
     }
 }
 
-void llava_buffer::load_from_disk() {
+void llava_buffer::load_from_disk(void* _target_buffer) {
+    u8* target_buffer = (u8*)_target_buffer;
     if (backing_buffer_name.empty()) {
         return;
     }
@@ -96,15 +95,14 @@ void llava_buffer::load_from_disk() {
 
     auto& table = context->get_model()->get_buffer_descriptor(backing_buffer_name);
     if (type == ggml_value_type::f32) {
-        memcpy(map(), context->get_model()->mapping + table.offset, (size_t) table.size);
-        unmap();
+        memcpy(target_buffer + buffers.at(0).offset, context->get_model()->mapping + table.offset, (size_t) table.size);
     } else if (type == ggml_value_type::q4_0) {
         u32 column_count = shape.second;
         uint32_t* raw_data = reinterpret_cast<uint32_t *>(context->get_model()->mapping + table.offset);
         size_t block_count = (shape.first * shape.second) / 32;
 
         {
-            auto* d_data = static_cast<uint32_t *>(map(0));
+            auto* d_data = (uint32_t*)(target_buffer + buffers.at(0).offset);
             for (size_t i = 0; i < block_count; ++i) {
                 uint32_t row_id = i / (column_count / 32);
                 uint32_t column_id = i % (column_count / 32);
@@ -112,11 +110,10 @@ void llava_buffer::load_from_disk() {
                 u32 fpsid = row_id & 3;
                 d_data[fpid * 4 * (column_count / 32) + 4 * column_id + fpsid] = raw_data[5 * i];
             }
-            unmap();
         }
 
         {
-            auto* q_data = static_cast<uint32_t *>(map(1));
+            auto* q_data = (uint32_t*)(target_buffer + buffers.at(1).offset);
             for (size_t i = 0; i < block_count; ++i) {
                 uint32_t row_id = i / (column_count / 32);
                 uint32_t column_id = i % (column_count / 32);
@@ -127,7 +124,6 @@ void llava_buffer::load_from_disk() {
                     q_data[fpid * 4 * (column_count / 32) * 4 + 4 * 4 * column_id + 4 * sub_block_id + fpsid] = raw_data[5 * i + 1 + sub_block_id];
                 }
             }
-            unmap();
         }
     } else {
         assert(false);
@@ -254,5 +250,21 @@ void *llava_buffer::map(u32 index, u32 offset, u32 size) const {
 }
 
 void llava_buffer::unmap() const {
+    return context->get_device().unmapMemory(device_memory->get_device_memory());
+}
+
+void llava_buffer::load_to_gpu() {
+    u64 min_offset = ~0UL;
+    u64 max_offset = 0;
+    for (auto& buffer : buffers) {
+        if (buffer.offset < min_offset) {
+            min_offset = buffer.offset;
+        }
+        if (buffer.offset + buffer.size > max_offset) {
+            max_offset = buffer.offset + buffer.size;
+        }
+    }
+    u8* mapping = (u8*)(context->get_device().mapMemory(device_memory->get_device_memory(), min_offset, max_offset - min_offset));
+    load_from_disk(mapping - min_offset); // TODO horrible
     return context->get_device().unmapMemory(device_memory->get_device_memory());
 }

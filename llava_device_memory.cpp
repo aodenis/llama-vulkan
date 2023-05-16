@@ -2,7 +2,10 @@
 #include "llava_context.h"
 #include <iostream>
 
-llava_device_memory::llava_device_memory(llava_context* _context) : context(_context) {
+atomic<u64> llava_device_memory::object_count(0);
+
+llava_device_memory::llava_device_memory(llava_context* _context) : object_id(object_count++),
+                                                                    context(_context) {
 
 }
 
@@ -32,9 +35,17 @@ bool llava_device_memory::is_frozen() const {
 
 void llava_device_memory::freeze() {
     assert(not is_frozen());
+    if (fallback) {
+        return fallback->freeze();
+    }
     device_memory = context->get_device().allocateMemory({cursor, context->mainMemoryTypeIndex});
     for (llava_buffer* buffer : buffers) {
         buffer->on_memory_freeze();
+    }
+    for (llava_device_memory* friend_memory : pool_friends) {
+        for (llava_buffer* buffer : friend_memory->buffers) {
+            buffer->on_memory_freeze();
+        }
     }
 }
 
@@ -66,6 +77,9 @@ void llava_device_memory::join_memory_pool(llava_device_memory* new_pool_master)
     if(new_pool_master > this) {
         return new_pool_master->join_memory_pool(this);
     }
+    if (fallback == new_pool_master) {
+        return;
+    }
     assert(fallback == nullptr);
     assert(not (new_pool_master->is_frozen() or is_frozen()));
     // TODO assert types are compatible
@@ -81,4 +95,29 @@ void llava_device_memory::join_memory_pool(llava_device_memory* new_pool_master)
 vk::DeviceMemory const &llava_device_memory::get_device_memory() {
     assert(is_frozen());
     return fallback ? fallback->device_memory : device_memory;
+}
+
+void* llava_device_memory::map() {
+    // TODO some checks
+    return context->get_device().mapMemory(get_device_memory(), 0, cursor);
+}
+
+void llava_device_memory::unmap() {
+    // TODO some checks
+    context->get_device().unmapMemory(get_device_memory());
+}
+
+size_t llava_device_memory::get_size() const {
+    assert(is_frozen());
+    return cursor;
+}
+
+bool llava_device_memory::is_part_of_pool() const {
+    assert(is_frozen());
+    return (fallback != nullptr) or (not pool_friends.empty());
+}
+
+llava_device_memory const *llava_device_memory::get_fallback() const {
+    assert(is_part_of_pool());
+    return fallback ? fallback : this;
 }
