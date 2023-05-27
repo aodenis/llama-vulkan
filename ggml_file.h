@@ -72,6 +72,7 @@ public:
     ~ggml_file();
     void print_info() const;
     void tokenize(std::vector<u32> &output, const std::string &text, bool bos);
+    string tokens_to_text(u32 const* tokens, u32 count) const;
     std::vector<ggml_data_descriptor> const& get_buffers();
     ggml_data_descriptor const& get_buffer_descriptor(const string& s) const;
 

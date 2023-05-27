@@ -209,10 +209,11 @@ static size_t utf8_len(char src) {
 
 void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text, bool bos) {
     if (text.empty()) {
-        output.clear();
         return;
     }
 
+    symbols_.clear();
+    assert(work_queue_.empty());
     if (bos) {
         output.push_back(1);
     }
@@ -306,4 +307,18 @@ ggml_data_descriptor const &ggml_file::get_buffer_descriptor(const string &s) co
     auto jt = name_to_index.find(s + ".weight");
     assert(jt != name_to_index.end());
     return tables.at(jt->second);
+}
+
+string ggml_file::tokens_to_text(const u32 * _tokens, u32 count) const {
+    u32 sz = 0;
+    for(u32 j = 0; j < count; ++j) {
+        sz += tokens.at(_tokens[j]).text.size();
+    }
+    vector<char> res;
+    res.reserve(sz + 1);
+    for(u32 j = 0; j < count; ++j) {
+        res.insert(res.end(), tokens.at(_tokens[j]).text.begin(), tokens.at(_tokens[j]).text.end());
+    }
+    res.push_back(0);
+    return res.data();
 }
