@@ -7,6 +7,7 @@
 #include "utils.h"
 #include <iostream>
 #include <chrono>
+#include <csignal>
 #include <vulkan/vulkan.hpp>
 #include "ggml_file.h"
 #include <cmath>
@@ -15,6 +16,22 @@
 #ifdef RUNTIME_BUILD_ENABLED
 #include <glslang/Public/ShaderLang.h>
 #endif
+
+atomic<uint32_t> sig_w_id = 0;
+atomic<uint32_t> sig_r_id = 0;
+int caught_signals[16] = {0};
+
+void handle_signal(int signal) {
+    u32 index = (sig_w_id++) % 16;
+    caught_signals[index] = signal;
+}
+
+int pop_signal() {
+    if (sig_r_id.load() < sig_w_id.load()) {
+        return caught_signals[(sig_r_id++) % 16];
+    }
+    return 0;
+}
 
 vk::PhysicalDevice llava_context::find_suitable_physical_device() {
     auto physical_devices = vulkan_instance.enumeratePhysicalDevices();
@@ -90,9 +107,9 @@ u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical
     auto memory_properties = _physical_device.getMemoryProperties();
     set<u32> accepted_memory_heaps;
     for(u32 i = 0; i < memory_properties.memoryHeapCount; i++) {
-        if (memory_properties.memoryHeaps.at(i).size > model->mapping_size) {
+        // if (memory_properties.memoryHeaps.at(i).size > model->mapping_size) {
             accepted_memory_heaps.insert(i);
-        }
+        // }
     }
     auto wanted_flags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
     list<u32> device_not_local_types;
@@ -312,27 +329,75 @@ int llava_context::run(int argc, char **argv) {
 
     set_batch_size(dec_tokens.size());
 
-    offload_layer(5, 15);
+    // With N = layer count, C = offload stream count, D = total count of layers involved in offloading
+    // Memory: VRAM = N - (D - C)
+    //         Host = D
+    // 13 -> 40
+    // D = 24
+    // C = 6
+
+    if (model->header.n_layers == 40) {
+        for (u32 i = 0; i < 6; ++i) {
+            for (u32 j = 1; j < 4; ++j) {
+                offload_layer(i, j * 10 + i);
+            }
+        }
+    } /* else if (model->header.n_layers == 32) {
+        for (u32 i = 0; i < 4; ++i) {
+            for (u32 j = 1; j < 4; ++j) {
+                offload_layer(i, j * 8 + i);
+            }
+        }
+    } */
+
+    u64 vram_usage = 0;
+    u64 memory_usage = 0;
+    for (auto& layer : layers) {
+        if (not layer.is_layer_data_offloaded()) {
+            vram_usage ++;
+        } else if (layer.is_offload_main_layer()) {
+            vram_usage ++;
+            memory_usage ++;
+        } else {
+            memory_usage ++;
+        }
+    }
+
+    cout << "Layers in memory : " << memory_usage << endl;
+    cout << "Layers in device : " << vram_usage << endl;
 
     for (auto& layer : layers) {
         layer.freeze_cache_storage();
-        if (not layer.is_layer_data_offloaded()) {
+        if ((not layer.is_layer_data_offloaded()) or layer.is_offload_main_layer()) {
             layer.freeze_storage();
-            layer.load_to_gpu();
-        } else if (layer.is_offload_main_layer()) {
-            layer.freeze_storage();
-            layer.load_to_host();
-            layer.load_to_gpu();
-        } else {
+        }
+    }
+
+    for (auto& layer : layers) {
+        if (layer.is_layer_data_offloaded()) {
             layer.load_to_host();
         }
     }
 
+    cerr << "Done unpacking to host" << endl;
+    for (auto& layer : layers) {
+        if (layer.get_offload_id() == layer.layer_id) {
+            layer.load_to_gpu();
+        }
+    }
+    cerr << "Done copying to GPU" << endl;
+
+    struct sigaction action{
+
+    };
+    action.sa_handler = handle_signal;
+    assert(sigaction(SIGINT, &action, nullptr) == 0);
+
     u32 eos_id = 2;
     uint32_t next_token;
-    auto start_time = std::chrono::high_resolution_clock::now();
     process_tokens(dec_tokens);
     next_token = get_last_predicted_token();
+    auto start_time = std::chrono::high_resolution_clock::now();
     while (tokens.size() < backlog_size) {
         uint32_t token = tokens.size() < dec_tokens.size() ? dec_tokens.at(tokens.size()) : next_token;
         if (token == eos_id) {
@@ -347,6 +412,10 @@ int llava_context::run(int argc, char **argv) {
         // cout << token_value.data() << " -> " << next_token_value.data() << " (" << token << " -> " << next_token << ")\n";
         cout << token_value.data();
         cout << flush;
+        int recv_sig = pop_signal();
+        if (recv_sig != 0) {
+            break;
+        }
     }
     if (next_token != eos_id) {
         vector<char> last_token_value = model->tokens[next_token].text;
@@ -356,8 +425,8 @@ int llava_context::run(int argc, char **argv) {
     cout << endl;
     auto end_time = std::chrono::high_resolution_clock::now();
     u64 ns = chrono::duration_cast<chrono::nanoseconds>(end_time - start_time).count();
-    cout << tokens.size() << " tokens in " << (ns/1000000) << " milliseconds" << endl;
-    cout << (ns/(1000000*tokens.size())) << " milliseconds per token" << endl;
+    cout << (tokens.size() - dec_tokens.size()) << " tokens in " << (ns/1000000) << " milliseconds" << endl;
+    cout << (ns/(1000000*(tokens.size() - dec_tokens.size()))) << " milliseconds per token" << endl;
     return 0;
 }
 

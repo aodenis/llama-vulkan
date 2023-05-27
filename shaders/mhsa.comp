@@ -8,13 +8,20 @@ layout (binding = 0) buffer writeonly OutBuffer {
     float values[]; // [Z][BACKLOG * HEAD_COUNT]
 } outp;
 
-layout (binding = 1) buffer readonly MatrixDBuffer {
-    vec4 values[BACKLOG * HEAD_COUNT * QUARTERROT];  // [BACKLOG][HEAD_COUNT][QUARTERROT]
-} matd;
+layout (binding = 1) buffer readonly ConfigBuffer {
+    uint token_count;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} config;
 
-layout (binding = 2) buffer readonly InFBuffer {
-    vec4 values[]; // [Z][HEAD_COUNT][QUARTERROT], logits
-} inp;
+layout (binding = 2) buffer readonly MatrixDBuffer {
+    vec2 values[];  // [BACKLOG][HEAD_COUNT][QUARTERROT][2]
+} q_cache;
+
+layout (binding = 3) buffer readonly InFBuffer {
+    vec2 values[]; // [Z][HEAD_COUNT][QUARTERROT][2], logits
+} current_k; // K vector, logit
 
 #ifdef USE_SPEVAR
 layout (local_size_x_id = MAX_WGS_CID, local_size_y = 1, local_size_z = 1) in;
@@ -29,10 +36,22 @@ void main()
     const uint z_id = gl_GlobalInvocationID.z;
 
     const uint clamped_row_id = min(row_id, BACKLOG * HEAD_COUNT - 1);
+    const uint q_index = clamped_row_id / HEAD_COUNT;
     float result = 0;
+
     // TODO This could be parallel
-    for (int i = 0; i < QUARTERROT; i++) {
-        result += dot(inp.values[z_id * HEAD_COUNT * QUARTERROT + head_id * QUARTERROT + i], matd.values[clamped_row_id * QUARTERROT + i]);
+    for (int i = 0; i < 2 * QUARTERROT; i++) {
+        vec2 raw_K = current_k.values[z_id * HEAD_COUNT * 2 * QUARTERROT + head_id * 2 * QUARTERROT + i];
+        vec2 raw_Q = q_cache.values[clamped_row_id * 2 * QUARTERROT + i];
+
+        float d_theta = float(config.token_count + z_id - q_index) * pow(10000.0, -float(i)/float(2 * QUARTERROT));
+        float ct = cos(d_theta);
+        float st = sin(d_theta);
+        mat2 rot_mat;
+        rot_mat[0] = vec2(ct, -st);
+        rot_mat[1] = vec2(st, ct);
+
+        result += dot(raw_K, rot_mat * raw_Q);
     }
 
     if (clamped_row_id == row_id) {

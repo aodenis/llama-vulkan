@@ -8,7 +8,6 @@ glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/matmul_ff
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/matmul_dim.comp -o prebuilt_shaders/matmul_dim.spv
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/mhsa.comp -o prebuilt_shaders/mhsa.spv
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/normalize.comp -o prebuilt_shaders/normalize.spv
-glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/rope.comp -o prebuilt_shaders/rope.spv
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/softmax.comp -o prebuilt_shaders/softmax.spv
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/matmul_silu_ff.comp -o prebuilt_shaders/matmul_silu_ff.spv
 glslangValidator --target-env vulkan1.2 -DUSE_SPEVAR=1 -e main shaders/matmul_add_dim.comp -o prebuilt_shaders/matmul_add_dim.spv

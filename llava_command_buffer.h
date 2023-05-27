@@ -37,7 +37,6 @@ public:
     void multi_head_attention(llava_buffer* attn_out, llava_buffer* k_cache, llava_buffer* query);
     void perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out);
     void inplace_softmax(llava_buffer*);
-    void rope(llava_buffer* buf);
     void matmul_silu_ff(llava_buffer *outbuf, llava_buffer *w3_matrix, llava_buffer *w1_matrix, llava_buffer *inbuf);
 
 public:

@@ -1,4 +1,3 @@
-#include <iostream>
 #include "llava_command_buffer.h"
 #include "llava_context.h"
 #include "utils.h"
@@ -209,13 +208,11 @@ void llava_command_buffer::multi_head_attention(llava_buffer* out_buffer, llava_
     assert(out_buffer->shape.first == backlog_size);
     assert(out_buffer->shape.second == model->header.n_heads * context->batch_size);
 
-    return record_command("mhsa", {out_buffer, cache_buffer, query}, updiv(model->header.n_heads * backlog_size, workgroup_size), 1, context->batch_size);
+    return record_command("mhsa", {out_buffer, context->config_buffer, cache_buffer, query}, updiv(model->header.n_heads * backlog_size, workgroup_size), 1, context->batch_size);
 }
 
 void llava_command_buffer::inplace_softmax(llava_buffer* inout_buffer) {
     auto model = context->get_model();
-
-
 
     assert(inout_buffer->shape.first == backlog_size);
     assert(inout_buffer->shape.second == model->header.n_heads * context->batch_size);
@@ -223,16 +220,8 @@ void llava_command_buffer::inplace_softmax(llava_buffer* inout_buffer) {
     return record_command("softmax", {inout_buffer, context->config_buffer}, updiv(model->header.n_heads, context->get_spevar_struct().softmax_head_per_wavefront), 1, context->batch_size);
 }
 
-void llava_command_buffer::rope(llava_buffer* buf) {
-    auto model = context->get_model();
-
-    assert((model->header.rot % 2) == 0);
-    return record_command("rope", {buf, context->config_buffer}, updiv(buf->shape.first / 2, workgroup_size), 1, context->batch_size);
-}
-
 void llava_command_buffer::perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out) {
     auto model = context->get_model();
-
 
     assert(v_out and v_cache and softmax_out);
 

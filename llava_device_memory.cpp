@@ -74,21 +74,30 @@ size_t llava_device_memory::register_buffer(size_t alignment, size_t buffer_size
 
 void llava_device_memory::join_memory_pool(llava_device_memory* new_pool_master) {
     assert(new_pool_master);
+    assert(fallback != this);
+    assert(new_pool_master->fallback != new_pool_master);
+    if (new_pool_master->fallback) {
+        return join_memory_pool(new_pool_master->fallback);
+    }
+    if (fallback) {
+        return fallback->join_memory_pool(new_pool_master);
+    }
     if(new_pool_master > this) {
         return new_pool_master->join_memory_pool(this);
     }
-    if (fallback == new_pool_master) {
+    if (new_pool_master == this) {
         return;
     }
     assert(fallback == nullptr);
+    assert(new_pool_master->fallback == nullptr);
     assert(not (new_pool_master->is_frozen() or is_frozen()));
     // TODO assert types are compatible
     fallback = new_pool_master;
     assert(new_pool_master->pool_friends.insert(this).second);
     for (llava_device_memory* pool_friend : pool_friends) {
-        new_pool_master->pool_friends.insert(pool_friend);
         pool_friend->fallback = new_pool_master;
     }
+    new_pool_master->pool_friends.insert(pool_friends.begin(), pool_friends.end());
     pool_friends.clear();
 }
 

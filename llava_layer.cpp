@@ -46,8 +46,6 @@ void llava_layer::execute(llava_command_buffer *cmd_buf) const {
     cmd_buf->normalize_logit(ctx->current_thought_sublayer, ctx->current_thought, attention_norm);
     cmd_buf->matmul(ctx->current_Q, attention_wq, ctx->current_thought_sublayer);
     cmd_buf->matmul(ctx->current_K, attention_wk, ctx->current_thought_sublayer);
-    cmd_buf->rope(ctx->current_Q);
-    cmd_buf->rope(ctx->current_K);
 
     cmd_buf->kv_copy(k_cache, ctx->current_K);
     cmd_buf->multi_head_attention(ctx->attn_result, k_cache, ctx->current_Q);
