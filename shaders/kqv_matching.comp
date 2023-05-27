@@ -2,7 +2,7 @@
 
 #extension GL_GOOGLE_include_directive:enable
 
-#define LOCAL_SUM_BITS ROT_BITS
+#define LOCAL_SUM_BITS BACKLOG_BITS
 
 #include "common.glsl"
 
