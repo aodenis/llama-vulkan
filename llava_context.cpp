@@ -15,6 +15,8 @@
 
 #ifdef RUNTIME_BUILD_ENABLED
 #include <glslang/Public/ShaderLang.h>
+#include <random>
+
 #endif
 
 atomic<uint32_t> sig_w_id = 0;
@@ -31,6 +33,10 @@ int pop_signal() {
         return caught_signals[(sig_r_id++) % 16];
     }
     return 0;
+}
+
+llava_context::llava_context() : rng(time(nullptr)), mirostat_mu(2 * mirostat_tau) {
+
 }
 
 vk::PhysicalDevice llava_context::find_suitable_physical_device() {
@@ -361,8 +367,10 @@ int llava_context::run(int argc, char **argv) {
         }
     }
 
-    cout << "Layers in memory : " << memory_usage << endl;
-    cout << "Layers in device : " << vram_usage << endl;
+    if (memory_usage) {
+        cout << "Layers in memory : " << memory_usage << endl;
+        cout << "Layers in device : " << vram_usage << endl;
+    }
 
     for (auto& layer : layers) {
         layer.freeze_cache_storage();
@@ -377,13 +385,19 @@ int llava_context::run(int argc, char **argv) {
         }
     }
 
-    cerr << "Done unpacking to host" << endl;
+    if (memory_usage) {
+        cerr << "Done unpacking to host" << endl;
+    }
+
     for (auto& layer : layers) {
         if (layer.get_offload_id() == layer.layer_id) {
             layer.load_to_gpu();
         }
     }
-    cerr << "Done copying to GPU" << endl;
+
+    if (memory_usage) {
+        cerr << "Done copying to GPU" << endl;
+    }
 
     struct sigaction action{
 
@@ -489,18 +503,6 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
         tokens.push_back(token_id);
     }
     queue.waitIdle();
-}
-
-u32 llava_context::get_last_predicted_token() const {
-    auto* res = static_cast<float *>(output_probs->map(0, (batch_size - 1) * model->header.vocab_size * sizeof(float), model->header.vocab_size * sizeof(float)));
-    u32 best = 0;
-    for(uint32_t i = 1; i < model->header.vocab_size; ++i) {
-        if (res[i] > res[best]) {
-            best = i;
-        }
-    }
-    output_probs->unmap();
-    return best;
 }
 
 string llava_context::generate_spevar_define_string() const {
@@ -644,4 +646,83 @@ void llava_context::offload_layer(u32 layer1, u32 layer2) {
             layers.at(x).set_offload(new_base);
         }
     }
+}
+
+struct llama_token_data {
+    u32 id;
+    float logit;
+    float p;
+};
+
+u32 llava_context::get_last_predicted_token() {
+    // based on llama_sample_token_mirostat_v2 from llama.cpp
+
+    auto n_vocab = model->header.vocab_size;
+
+    map<u32, u32> last_token_count;
+    for (u32 i = (repeat_last_n > session.size()) ? 0 : (session.size() - repeat_last_n); i < session.size(); ++i) {
+        last_token_count[session.at(i)]++;
+    }
+
+    auto* res = static_cast<float *>(output_probs->map(0, (batch_size - 1) * model->header.vocab_size * sizeof(float), model->header.vocab_size * sizeof(float)));
+
+    std::vector<llama_token_data> candidates;
+    candidates.reserve(n_vocab);
+    for (u32 token_id = 0; token_id < n_vocab; token_id++) {
+        candidates.emplace_back(llama_token_data{token_id, res[token_id], 0.0f});
+    }
+    output_probs->unmap();
+
+    for (auto& [tok_id, count] : last_token_count) {
+        if (tok_id == 13) {
+            continue; // Skip \n
+        }
+        if(candidates.at(tok_id).logit <= 0) {
+            candidates.at(tok_id).logit *= repeat_penalty;
+        } else {
+            candidates.at(tok_id).logit /= repeat_penalty;
+        }
+        candidates.at(tok_id).logit -= alpha_frequency * float(count) + alpha_presence;
+    }
+
+    for (u32 i = 0; i < n_vocab; ++i) {
+        candidates.at(i).logit /= temp;
+    }
+
+    std::sort(candidates.data(), candidates.data() + candidates.size(), [](const llama_token_data & a, const llama_token_data & b) {
+        return a.logit > b.logit;
+    });
+    float total = 0;
+    for (u32 i = 0; i < n_vocab; ++i) {
+        candidates.at(i).p = expf(candidates.at(i).logit);
+        total += candidates.at(i).p;
+    }
+
+    float new_sum = 0.;
+    float cut = powf(2., -mirostat_mu);
+    for (u32 i = 0; i < n_vocab; ++i) {
+        candidates.at(i).p /= total;
+        if (candidates.at(i).p < cut) {
+            candidates.resize(i);
+            break;
+        } else {
+            new_sum += candidates.at(i).p;
+        }
+    }
+    for (auto& tok : candidates) {
+        tok.p /= new_sum;
+    }
+
+    std::vector<float> probs;
+    probs.reserve(candidates.size());
+    for (auto& tok : candidates) {
+        probs.push_back(tok.p);
+    }
+
+    std::discrete_distribution<> dist(probs.begin(), probs.end());
+    int idx = dist(rng);
+
+    mirostat_mu += mirostat_eta * (mirostat_tau + log2f(candidates.at(idx).p));
+
+    return candidates.at(idx).id;
 }

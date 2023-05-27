@@ -7,6 +7,7 @@
 #include <set>
 #include <map>
 #include <list>
+#include <random>
 #include "llava_layer.h"
 #include "llava_buffer.h"
 #include "llava_pipeline.h"
@@ -39,7 +40,7 @@ class llava_context {
     friend class llava_pipeline;
     friend class llava_layer;
 public:
-    llava_context() = default;
+    llava_context();
     ~llava_context();
     int run(int argc, char** argv);
 
@@ -59,7 +60,7 @@ public:
     llava_pipeline* get_pipeline(const string& shader_name, u32 argument_count);
 
 public:
-    u32 backlog_size = 128;
+    u32 backlog_size = 1024;
     u32 batch_size = 0;
     u32 workgroup_size = 1024;
     specialization_variables_t specialization_variables{};
@@ -85,7 +86,7 @@ private:
     vector<llava_layer> layers;
     void process_tokens(vector<u32> const& token_ids);
     vector<u32> tokens;
-    [[nodiscard]] u32 get_last_predicted_token() const;
+    [[nodiscard]] u32 get_last_predicted_token();
     llava_command_buffer* command_buffer = nullptr;
 
 private: // buffers
@@ -126,6 +127,26 @@ private: // command buffer management
 
 private:
     void offload_layer(u32 layer1, u32 layer2);
+
+private:
+    u32 system_prompt_size = 0;
+    vector<u32> session;
+    void process_system_prompt(const string& system_prompt);
+    void process_text(const string& system_prompt);
+    void process_text_sync(const string& system_prompt);
+    void process_token_rotating(u32 token);
+    static string get_user_input();
+
+private:
+    std::mt19937 rng;
+    const u32 repeat_last_n = 64;
+    const float repeat_penalty = 1.1;
+    const float alpha_frequency = 0.0;
+    const float alpha_presence = 0.0;
+    const float temp = 0.8;
+    const float mirostat_tau = 5.0;
+    const float mirostat_eta = 0.1;
+    float mirostat_mu;
 };
 
 #endif //VULKAN_LLAMA_CONTEXT_H
