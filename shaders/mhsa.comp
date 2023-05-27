@@ -16,7 +16,7 @@ layout (binding = 1) buffer readonly ConfigBuffer {
 } config;
 
 layout (binding = 2) buffer readonly MatrixDBuffer {
-    vec2 values[];  // [BACKLOG][HEAD_COUNT][QUARTERROT][2]
+    f16vec2 values[];  // [BACKLOG][HEAD_COUNT][QUARTERROT][2]
 } q_cache;
 
 layout (binding = 3) buffer readonly InFBuffer {
@@ -42,7 +42,7 @@ void main()
     // TODO This could be parallel
     for (int i = 0; i < 2 * QUARTERROT; i++) {
         vec2 raw_K = current_k.values[z_id * HEAD_COUNT * 2 * QUARTERROT + head_id * 2 * QUARTERROT + i];
-        vec2 raw_Q = q_cache.values[clamped_row_id * 2 * QUARTERROT + i];
+        vec2 raw_Q = vec2(q_cache.values[clamped_row_id * 2 * QUARTERROT + i]);
 
         float d_theta = float(config.token_count + z_id - q_index) * pow(10000.0, -float(i)/float(2 * QUARTERROT));
         float ct = cos(d_theta);

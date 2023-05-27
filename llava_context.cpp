@@ -107,9 +107,9 @@ u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical
     auto memory_properties = _physical_device.getMemoryProperties();
     set<u32> accepted_memory_heaps;
     for(u32 i = 0; i < memory_properties.memoryHeapCount; i++) {
-        // if (memory_properties.memoryHeaps.at(i).size > model->mapping_size) {
+        if (memory_properties.memoryHeaps.at(i).size > model->mapping_size) {
             accepted_memory_heaps.insert(i);
-        // }
+        }
     }
     auto wanted_flags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
     list<u32> device_not_local_types;
@@ -250,7 +250,11 @@ int llava_context::run(int argc, char **argv) {
     // create a Device
     float queuePriority = 0.0f;
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo(vk::DeviceQueueCreateFlags(), queueFamilyIndex, 1, &queuePriority);
-    device = physical_device.createDevice({vk::DeviceCreateFlags(), deviceQueueCreateInfo});
+    vk::PhysicalDevice16BitStorageFeatures features16bit;
+    features16bit.storageInputOutput16 = true;
+    features16bit.uniformAndStorageBuffer16BitAccess = true;
+    features16bit.storageBuffer16BitAccess = true;
+    device = physical_device.createDevice(vk::DeviceCreateInfo(vk::DeviceCreateFlags(), deviceQueueCreateInfo, {}, {}, {}, &features16bit));
 
     // create a CommandPool to allocate a CommandBuffer from
     command_pool = device.createCommandPool({{}, queueFamilyIndex});
@@ -342,13 +346,7 @@ int llava_context::run(int argc, char **argv) {
                 offload_layer(i, j * 10 + i);
             }
         }
-    } /* else if (model->header.n_layers == 32) {
-        for (u32 i = 0; i < 4; ++i) {
-            for (u32 j = 1; j < 4; ++j) {
-                offload_layer(i, j * 8 + i);
-            }
-        }
-    } */
+    }
 
     u64 vram_usage = 0;
     u64 memory_usage = 0;
@@ -621,6 +619,7 @@ vector<llava_layer>& llava_context::get_layers() {
 }
 
 void llava_context::offload_layer(u32 layer1, u32 layer2) {
+    // DO NOT USE
     while (layers.at(layer1).get_offload_id() != layer1) {
         layer1 = layers.at(layer1).get_offload_id();
     }

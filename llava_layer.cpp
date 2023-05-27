@@ -20,8 +20,8 @@ llava_layer::llava_layer(llava_context *_context, u32 _layer_id) : layer_id(_lay
     feed_forward_w3 = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "feed_forward.w3"), layer_allocation);
     attention_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "attention_norm"), layer_allocation);
     ffn_norm = new llava_buffer(context, context->get_model()->get_buffer_descriptor(prefix + "ffn_norm"), layer_allocation);
-    k_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
-    v_cache = new llava_buffer(context, ggml_value_type::f32, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
+    k_cache = new llava_buffer(context, ggml_value_type::f16, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
+    v_cache = new llava_buffer(context, ggml_value_type::f16, context->backlog_size, context->get_model()->header.dim, layer_cache_allocation);
 }
 
 llava_layer::~llava_layer() {

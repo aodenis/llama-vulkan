@@ -11,7 +11,7 @@ layout (binding = 0) buffer writeonly OutBuffer {
 } outp;
 
 layout (binding = 1) buffer readonly VCacheBuffer {
-    float values[]; // [BACKLOG][DIM]
+    float16_t values[]; // [BACKLOG][DIM]
 } vcache;
 
 layout (binding = 2) buffer readonly AttnBuffer {
@@ -31,7 +31,10 @@ void main()
     const uint backlog_id = gl_GlobalInvocationID.y;
     const uint z_id = gl_GlobalInvocationID.z;
 
-    const float this_match = (v_row_id < DIM) ? attn.values[z_id * BACKLOG * HEAD_COUNT + backlog_id * HEAD_COUNT + (v_row_id / ROT)] * vcache.values[backlog_id * DIM + v_row_id] : 0.;
+    float this_match = 0.;
+    if (v_row_id < DIM) {
+        this_match = float(vcache.values[backlog_id * DIM + v_row_id]) * attn.values[z_id * BACKLOG * HEAD_COUNT + backlog_id * HEAD_COUNT + (v_row_id / ROT)];
+    }
     const float total_match = local_sum(local_v_row_id, backlog_id, this_match);
     if (v_row_id < DIM) {
         outp.values[z_id * DIM + v_row_id] = total_match;

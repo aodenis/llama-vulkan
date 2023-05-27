@@ -5,7 +5,7 @@
 #include "common.glsl"
 
 layout (binding = 0) buffer writeonly CacheBuffer {
-     float values[];
+     float16_t values[];
 } cache;
 
 layout (binding = 1) buffer readonly ConfigBuffer {
@@ -31,5 +31,5 @@ void main()
     const uint i = gl_GlobalInvocationID.x;
     const uint z_id = gl_GlobalInvocationID.z;
 
-    cache.values[(config.token_count + z_id) * DIM + i] = inp.values[i + DIM * z_id];
+    cache.values[(config.token_count + z_id) * DIM + i] = float16_t(inp.values[i + DIM * z_id]);
 }
