@@ -341,6 +341,7 @@ int llava_context::run(int argc, char **argv) {
     action.sa_handler = handle_signal;
     assert(sigaction(SIGINT, &action, nullptr) == 0);
     assert(sigaction(SIGTERM, &action, nullptr) == 0);
+    assert(sigaction(SIGHUP, &action, nullptr) == 0);
 
     set_batch_size(dec_tokens.size());
 
@@ -400,12 +401,33 @@ int llava_context::run(int argc, char **argv) {
         cerr << "Done unpacking to host" << endl;
     }
 
-    for (auto& layer : layers) {
-        if (pop_signal() != 0) {
-            return 1;
+    {
+        list<u32> layers_to_load;
+        mutex gpu_load_mutex;
+        for (auto& layer : layers) {
+            if (layer.get_offload_id() == layer.layer_id) {
+                layers_to_load.push_back(layer.layer_id);
+            }
         }
-        if (layer.get_offload_id() == layer.layer_id) {
-            layer.load_to_gpu();
+        vector<thread> gpu_load_threads;
+        for(u32 i = 0; i < 8; ++i) {
+            gpu_load_threads.emplace_back([this, &layers_to_load, &gpu_load_mutex](){
+                while (true) {
+                    u32 to_load = ~0U;
+                    {
+                        lock_guard guard(gpu_load_mutex);
+                        if(layers_to_load.empty()) {
+                            break;
+                        }
+                        to_load = layers_to_load.front();
+                        layers_to_load.pop_front();
+                    }
+                    this->layers.at(to_load).load_to_gpu();
+                }
+            });
+        }
+        for (auto& t : gpu_load_threads) {
+            t.join();
         }
     }
 
@@ -421,7 +443,6 @@ int llava_context::run(int argc, char **argv) {
     auto start_time = std::chrono::high_resolution_clock::now();
     while (tokens.size() < backlog_size) {
         if (pop_signal() != 0) {
-            cerr << "Received Ctrl-C" << endl;
             break;
         }
         uint32_t token = tokens.size() < dec_tokens.size() ? dec_tokens.at(tokens.size()) : next_token;
