@@ -2,50 +2,27 @@
 #include "llava_context.h"
 #include <iostream>
 
-atomic<u64> llava_device_memory::object_count(0);
-
-llava_device_memory::llava_device_memory(llava_context* _context) : object_id(object_count++),
-                                                                    context(_context) {
+llava_device_memory::llava_device_memory(llava_context* _context) : context(_context) {
 
 }
 
 llava_device_memory::~llava_device_memory() {
     assert(buffers.empty());
-    if (fallback) {
-        assert(fallback->pool_friends.erase(this));
-        fallback = nullptr;
-    } else if (not pool_friends.empty()) {
-        llava_device_memory* new_master = *pool_friends.begin();
-        pool_friends.erase(new_master);
-        for (llava_device_memory* pool_eq : pool_friends) {
-            pool_eq->fallback = new_master;
-        }
-        new_master->fallback = nullptr;
-        new_master->pool_friends = std::move(pool_friends);
-        new_master->device_memory = device_memory;
-    } else if (device_memory) {
+    if (device_memory) {
         context->get_device().freeMemory(device_memory);
         device_memory = nullptr;
     }
 }
 
 bool llava_device_memory::is_frozen() const {
-    return static_cast<bool>(fallback ? fallback->device_memory : device_memory);
+    return static_cast<bool>(device_memory);
 }
 
 void llava_device_memory::freeze() {
     assert(not is_frozen());
-    if (fallback) {
-        return fallback->freeze();
-    }
     device_memory = context->get_device().allocateMemory({cursor, context->mainMemoryTypeIndex});
     for (llava_buffer* buffer : buffers) {
         buffer->on_memory_freeze();
-    }
-    for (llava_device_memory* friend_memory : pool_friends) {
-        for (llava_buffer* buffer : friend_memory->buffers) {
-            buffer->on_memory_freeze();
-        }
     }
 }
 
@@ -72,38 +49,9 @@ size_t llava_device_memory::register_buffer(size_t alignment, size_t buffer_size
     return ret_cursor;
 }
 
-void llava_device_memory::join_memory_pool(llava_device_memory* new_pool_master) {
-    assert(new_pool_master);
-    assert(fallback != this);
-    assert(new_pool_master->fallback != new_pool_master);
-    if (new_pool_master->fallback) {
-        return join_memory_pool(new_pool_master->fallback);
-    }
-    if (fallback) {
-        return fallback->join_memory_pool(new_pool_master);
-    }
-    if(new_pool_master > this) {
-        return new_pool_master->join_memory_pool(this);
-    }
-    if (new_pool_master == this) {
-        return;
-    }
-    assert(fallback == nullptr);
-    assert(new_pool_master->fallback == nullptr);
-    assert(not (new_pool_master->is_frozen() or is_frozen()));
-    // TODO assert types are compatible
-    fallback = new_pool_master;
-    assert(new_pool_master->pool_friends.insert(this).second);
-    for (llava_device_memory* pool_friend : pool_friends) {
-        pool_friend->fallback = new_pool_master;
-    }
-    new_pool_master->pool_friends.insert(pool_friends.begin(), pool_friends.end());
-    pool_friends.clear();
-}
-
 vk::DeviceMemory const &llava_device_memory::get_device_memory() {
     assert(is_frozen());
-    return fallback ? fallback->device_memory : device_memory;
+    return device_memory;
 }
 
 void* llava_device_memory::map() {
@@ -119,14 +67,4 @@ void llava_device_memory::unmap() {
 size_t llava_device_memory::get_size() const {
     assert(is_frozen());
     return cursor;
-}
-
-bool llava_device_memory::is_part_of_pool() const {
-    assert(is_frozen());
-    return (fallback != nullptr) or (not pool_friends.empty());
-}
-
-llava_device_memory const *llava_device_memory::get_fallback() const {
-    assert(is_part_of_pool());
-    return fallback ? fallback : this;
 }

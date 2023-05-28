@@ -2,48 +2,9 @@
 #include "llava_context.h"
 #include "utils.h"
 
-struct layer_offload_data {
-    llava_layer* layer = nullptr;
-    vk::Event eof_event = nullptr;
-    vk::Event load_event = nullptr;
-};
-
-struct worker_task {
-    vector<layer_offload_data> managed_layers;
-};
-
-void offload_worker(llava_command_buffer *cmd_buf, worker_task* task) {
-    llava_context* context = cmd_buf->context;
-    u32 const managed_layer_count = task->managed_layers.size();
-    context->get_device().setEvent(task->managed_layers.front().load_event);
-    for (u32 i = 1; i < managed_layer_count; ++i) {
-        context->get_device().resetEvent(task->managed_layers.at(i).load_event);
-    }
-    while(true) {
-        {
-            unique_lock lock(cmd_buf->offload_mutex);
-            cmd_buf->offload_cv.wait(lock);
-        }
-        if (cmd_buf->thread_end_flag.load()) {
-            delete task; // TODO thread safe ?
-            return;
-        }
-        for (u32 i = 0; i < managed_layer_count; i++) {
-            while (context->get_device().getEventStatus(task->managed_layers.at(i).eof_event) == vk::Result::eEventReset) {
-                // TODO horrible
-                usleep(10);
-            }
-            context->get_device().resetEvent(task->managed_layers.at(i).load_event);
-            task->managed_layers.at((i + 1) % managed_layer_count).layer->load_to_gpu();
-            context->get_device().setEvent(task->managed_layers.at((i+1) % managed_layer_count).load_event);
-        }
-    }
-}
-
 llava_command_buffer::llava_command_buffer(llava_context *_context) : context(_context),
                                                                       backlog_size(context->backlog_size),
                                                                       workgroup_size(context->workgroup_size) {
-    thread_end_flag.store(false);
 }
 
 llava_command_buffer::~llava_command_buffer() {
@@ -52,59 +13,18 @@ llava_command_buffer::~llava_command_buffer() {
 
 void llava_command_buffer::reset() {
     context->get_queue().waitIdle();
-    thread_end_flag.store(true);
-    offload_cv.notify_all();
-    for (auto& x : offload_threads) {
-        x.join();
-    }
-    offload_threads.clear();
 
     buffer_to_last_write_event.clear();
     command_buffer_raw.clear();
-    layer_process_done_events.clear();
     command_buffer.clear();
-    for(auto& event : layer_load_done_events) {
-        if (event) {
-            context->get_device().destroy(event);
-        }
-    }
-    layer_load_done_events.clear();
-    current_layer = ~0;
-    thread_end_flag.store(false);
 }
 
 void llava_command_buffer::record_execution() {
     reset();
-    layer_process_done_events.resize(context->get_layers().size());
-    layer_load_done_events.resize(context->get_layers().size());
-    current_layer = 0;
-    map<u64, worker_task*> offload_mem_to_offload_id;
 
     for (auto& layer : context->get_layers()) {
-        if (layer.is_layer_data_offloaded()) {
-            layer_load_done_events[current_layer] = context->get_device().createEvent({});
-        }
         layer.execute(this);
-        if (not command_buffer.empty()) {
-            layer_process_done_events[current_layer] = command_buffer.back().completionEvent;
-        }
-        if (layer.is_layer_data_offloaded()) {
-            worker_task* task;
-            if (not offload_mem_to_offload_id.contains(layer.get_offload_id())) {
-                task = new worker_task;
-                offload_mem_to_offload_id[layer.get_offload_id()] = task;
-            } else {
-                task = offload_mem_to_offload_id.at(layer.get_offload_id());
-            }
-            auto& managed_layer = task->managed_layers.emplace_back();
-            managed_layer.layer = &layer;
-            managed_layer.load_event = layer_load_done_events.at(current_layer);
-            managed_layer.eof_event = layer_process_done_events.at(current_layer);
-            assert(managed_layer.eof_event);
-        }
-        current_layer++;
     }
-    current_layer = ~0U;
 
     normalize_logit(context->current_thought_sublayer, context->current_thought, context->norm_w);
     matmul(context->output_probs, context->output_w, context->current_thought_sublayer);
@@ -113,17 +33,12 @@ void llava_command_buffer::record_execution() {
     for (auto& command : command_buffer) {
         command_buffer_raw.push_back(command.commandBuffer);
     }
-
-    for (auto& [_, b] : offload_mem_to_offload_id) {
-        offload_threads.emplace_back(offload_worker, this, b);
-    }
 }
 
 void llava_command_buffer::run() {
     for (auto& x : command_buffer) {
         context->get_device().resetEvent(x.completionEvent);
     }
-    offload_cv.notify_all();
 
     vk::SubmitInfo submitInfo({}, {}, command_buffer_raw, {});
     context->get_queue().submit(submitInfo);
@@ -294,10 +209,6 @@ void llava_command_buffer::record_command(const string &pipeline_name,
                 auto dstAccessMask = (buffer == output_buffer) ? (vk::AccessFlagBits::eShaderWrite) : (vk::AccessFlagBits::eShaderRead);
                 barriers.emplace_back(vk::AccessFlagBits::eShaderWrite, dstAccessMask, context->get_queue_family_index(), context->get_queue_family_index(), sub_buffer.buffer, 0, sub_buffer.size);
             }
-        } else if ((~current_layer) and layer_load_done_events.at(current_layer) and not buffer->backing_buffer_name.empty()) {
-            for (auto& sub_buffer : buffer->get_sub_buffers()) {
-                host_barriers.emplace_back(vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead, context->get_queue_family_index(), context->get_queue_family_index(), sub_buffer.buffer, 0, sub_buffer.size);
-            }
         }
     }
 
@@ -308,9 +219,6 @@ void llava_command_buffer::record_command(const string &pipeline_name,
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline->pipelineLayout, 0, descriptorSet, {});
     if (not events.empty()) {
         commandBuffer.waitEvents(events, vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, barriers, {});
-    }
-    if ((current_layer != ~0U) and (layer_load_done_events.at(current_layer)) and (not host_barriers.empty())) {
-        commandBuffer.waitEvents({layer_load_done_events.at(current_layer)}, vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eComputeShader, {}, host_barriers, {});
     }
     commandBuffer.dispatch(countX, countY, countZ);
     commandBuffer.setEvent(completionEvent, vk::PipelineStageFlagBits::eComputeShader);

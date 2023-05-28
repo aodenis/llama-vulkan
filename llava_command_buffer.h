@@ -8,8 +8,6 @@
 #include <thread>
 #include <condition_variable>
 
-struct worker_task;
-
 class llava_wrapped_command {
 public:
     llava_wrapped_command(llava_context* context, vk::DescriptorSet descriptorSet, vk::CommandBuffer commandBuffer, vk::Event completionEvent);
@@ -24,7 +22,6 @@ public:
 };
 
 class llava_command_buffer {
-    friend void offload_worker(llava_command_buffer *cmd_buf, worker_task* task);
 public:
     explicit llava_command_buffer(llava_context *context);
     ~llava_command_buffer();
@@ -50,15 +47,6 @@ public:
 private: // command buffer stuff
     list<llava_wrapped_command> command_buffer;
     vector<vk::CommandBuffer> command_buffer_raw;
-    vector<vk::Event> layer_load_done_events;
-    vector<vk::Event> layer_process_done_events;
-    u32 current_layer = ~0U;
-
-private: // offload
-    vector<thread> offload_threads;
-    mutex offload_mutex;
-    condition_variable offload_cv;
-    atomic_bool thread_end_flag;
 
 private:
     map<llava_buffer*, vk::Event> buffer_to_last_write_event;

@@ -6,8 +6,7 @@
 #include "llava_context.h"
 
 llava_layer::llava_layer(llava_context *_context, u32 _layer_id) : layer_id(_layer_id),
-                                                                   context(_context),
-                                                                   offload_layer_id(layer_id) {
+                                                                   context(_context) {
     layer_allocation = new llava_device_memory(context);
     layer_cache_allocation = new llava_device_memory(context);
     string prefix = "layers." + to_string(layer_id) + ".";
@@ -86,29 +85,8 @@ void llava_layer::load_to_gpu() {
     layer_allocation->unmap();
 }
 
-void llava_layer::load_to_host() {
-    if (raw_layer != nullptr) {
-        return;
-    }
-    raw_layer = new u8[layer_allocation->get_size()];
-    attention_wq->load_from_disk(raw_layer);
-    attention_wk->load_from_disk(raw_layer);
-    attention_wv->load_from_disk(raw_layer);
-    attention_wo->load_from_disk(raw_layer);
-    feed_forward_w1->load_from_disk(raw_layer);
-    feed_forward_w2->load_from_disk(raw_layer);
-    feed_forward_w3->load_from_disk(raw_layer);
-    attention_norm->load_from_disk(raw_layer);
-    ffn_norm->load_from_disk(raw_layer);
-}
-
-bool llava_layer::is_layer_data_offloaded() const {
-    return is_offloaded;
-}
-
 llava_layer::llava_layer(llava_layer && other) noexcept : context(other.context),
-                                                          layer_id(other.layer_id),
-                                                          offload_layer_id(other.offload_layer_id)
+                                                          layer_id(other.layer_id)
                                                           {
     layer_allocation = other.layer_allocation;
     other.layer_allocation = nullptr;
@@ -138,21 +116,4 @@ llava_layer::llava_layer(llava_layer && other) noexcept : context(other.context)
     other.v_cache = nullptr;
     raw_layer = other.raw_layer;
     other.raw_layer = nullptr;
-}
-
-bool llava_layer::is_offload_main_layer() const {
-    return layer_id == offload_layer_id;
-}
-
-u32 llava_layer::get_offload_id() const {
-    return offload_layer_id;
-}
-
-void llava_layer::set_offload(u32 other_layer) {
-    is_offloaded = true;
-    if (offload_layer_id == other_layer) {
-        return;
-    }
-    offload_layer_id = other_layer;
-    context->layers.at(other_layer).layer_allocation->join_memory_pool(layer_allocation);
 }

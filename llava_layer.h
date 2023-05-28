@@ -13,14 +13,7 @@ public:
     void execute(llava_command_buffer* cmd_buf) const;
     void freeze_storage();
     void freeze_cache_storage();
-    [[nodiscard]] bool is_layer_data_offloaded() const;
-    void load_to_host();
     void load_to_gpu();
-    void set_offload(u32 other_layer);
-
-public:
-    [[nodiscard]] bool is_offload_main_layer() const;
-    [[nodiscard]] u32 get_offload_id() const;
 
 public:
     u32 const layer_id;
@@ -43,8 +36,6 @@ private:
 
 private:
     u8* raw_layer = nullptr;
-    u32 offload_layer_id;
-    bool is_offloaded = false;
 };
 
 #endif

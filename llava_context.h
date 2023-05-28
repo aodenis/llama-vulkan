@@ -116,7 +116,6 @@ private:
     u32 find_suitable_memory_type(const vk::PhysicalDevice &_physical_device);
     u32 find_suitable_queue_index();
     vk::PhysicalDevice find_suitable_physical_device();
-    vector<set<u32>> offloads;
 
 private:
     void reset_main_buffers();
@@ -124,9 +123,6 @@ private:
 private: // command buffer management
     void set_batch_size(u32 _batch_size);
     void recreate_buffers();
-
-private:
-    void offload_layer(u32 layer1, u32 layer2);
 
 private:
     u32 system_prompt_size = 0;

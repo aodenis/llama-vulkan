@@ -345,69 +345,25 @@ int llava_context::run(int argc, char **argv) {
 
     set_batch_size(dec_tokens.size());
 
-    // With N = layer count, C = offload stream count, D = total count of layers involved in offloading
-    // Memory: VRAM = N - (D - C)
-    //         Host = D
-    // 13 -> 40
-    // D = 24
-    // C = 6
-
-    if (model->header.n_layers == 40) {
-        for (u32 i = 0; i < 6; ++i) {
-            for (u32 j = 1; j < 4; ++j) {
-                offload_layer(i, j * 10 + i);
-            }
-        }
-    }
-
-    u64 vram_usage = 0;
-    u64 memory_usage = 0;
-    for (auto& layer : layers) {
-        if (not layer.is_layer_data_offloaded()) {
-            vram_usage ++;
-        } else if (layer.is_offload_main_layer()) {
-            vram_usage ++;
-            memory_usage ++;
-        } else {
-            memory_usage ++;
-        }
-    }
-
-    if (memory_usage) {
-        cout << "Layers in memory : " << memory_usage << endl;
-        cout << "Layers in device : " << vram_usage << endl;
-    }
-
     for (auto& layer : layers) {
         if (pop_signal() != 0) {
             return 1;
         }
         layer.freeze_cache_storage();
-        if ((not layer.is_layer_data_offloaded()) or layer.is_offload_main_layer()) {
-            layer.freeze_storage();
-        }
+        layer.freeze_storage();
     }
 
     for (auto& layer : layers) {
         if (pop_signal() != 0) {
             return 1;
         }
-        if (layer.is_layer_data_offloaded()) {
-            layer.load_to_host();
-        }
-    }
-
-    if (memory_usage) {
-        cerr << "Done unpacking to host" << endl;
     }
 
     {
         list<u32> layers_to_load;
         mutex gpu_load_mutex;
         for (auto& layer : layers) {
-            if (layer.get_offload_id() == layer.layer_id) {
-                layers_to_load.push_back(layer.layer_id);
-            }
+            layers_to_load.push_back(layer.layer_id);
         }
         vector<thread> gpu_load_threads;
         for(u32 i = 0; i < 8; ++i) {
@@ -429,10 +385,6 @@ int llava_context::run(int argc, char **argv) {
         for (auto& t : gpu_load_threads) {
             t.join();
         }
-    }
-
-    if (memory_usage) {
-        cerr << "Done copying to GPU" << endl;
     }
 
     u32 eos_id = 2;
@@ -510,9 +462,7 @@ llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argum
 }
 
 void llava_context::process_tokens(vector<u32> const& token_ids) {
-    if (token_ids.size() != batch_size) {
-        set_batch_size(token_ids.size());
-    }
+    set_batch_size(token_ids.size());
     if (command_buffer == nullptr) {
         command_buffer = new llava_command_buffer(this);
         command_buffer->record_execution();
@@ -651,32 +601,71 @@ vector<llava_layer>& llava_context::get_layers() {
     return layers;
 }
 
-void llava_context::offload_layer(u32 layer1, u32 layer2) {
-    // DO NOT USE
-    while (layers.at(layer1).get_offload_id() != layer1) {
-        layer1 = layers.at(layer1).get_offload_id();
-    }
-    while (layers.at(layer2).get_offload_id() != layer2) {
-        layer2 = layers.at(layer2).get_offload_id();
-    }
-    if (layer1 == layer2) {
-        return; // Already together
-    }
-    set<u32> offload_layers;
-    offload_layers.insert(layer1);
-    offload_layers.insert(layer2);
-    for (u32 i = 0; i < layers.size(); ++i) {
-        if (offload_layers.contains(layers.at(i).get_offload_id())) {
-            offload_layers.insert(i);
+void llava_context::process_system_prompt(const string& system_prompt) {
+    assert (session.empty());
+    model->tokenize(session, system_prompt, true);
+    system_prompt_size = session.size();
+    assert(system_prompt_size + 16 <= backlog_size);
+    tokens.clear();
+    process_tokens(session);
+}
+
+void llava_context::process_text(const string& text) {
+    vector<u32> new_tokens;
+    model->tokenize(new_tokens, text, false);
+    u32 max_user_text_len = backlog_size - system_prompt_size;
+    u32 half_max_user_text_len = max_user_text_len / 2;
+    if (new_tokens.size() + tokens.size() >= backlog_size) {
+        if (new_tokens.size() < half_max_user_text_len) {
+            vector<u32> new_new_tokens;
+            new_new_tokens.reserve(half_max_user_text_len);
+            new_new_tokens.insert(new_new_tokens.end(), tokens.end() - (u32)(half_max_user_text_len - new_tokens.size()), tokens.end());
+            new_new_tokens.insert(new_new_tokens.end(), new_tokens.begin(), tokens.end());
+            new_tokens = new_new_tokens;
+        } else {
+            vector<u32> new_new_tokens;
+            new_new_tokens.reserve(half_max_user_text_len);
+            new_new_tokens.insert(new_new_tokens.end(), new_tokens.end() - half_max_user_text_len, new_tokens.end());
+            new_tokens = new_new_tokens;
         }
+        tokens.resize(system_prompt_size);
     }
-    u32 new_base = *offload_layers.begin();
-    assert(new_base == layer1);
-    if (offload_layers.size() > 1) {
-        for (auto& x : offload_layers) {
-            layers.at(x).set_offload(new_base);
+    process_tokens(new_tokens);
+}
+
+void llava_context::process_token_rotating(u32 token) {
+    u32 max_user_text_len = backlog_size - system_prompt_size;
+    u32 half_max_user_text_len = max_user_text_len / 2;
+    vector<u32> new_tokens = {token};
+    if (1 + tokens.size() >= backlog_size) {
+        new_tokens.clear();
+        new_tokens.reserve(half_max_user_text_len);
+        new_tokens.insert(new_tokens.end(), tokens.end() - (half_max_user_text_len - 1), tokens.end());
+        new_tokens.push_back(token);
+        tokens.resize(system_prompt_size);
+    }
+    process_tokens(new_tokens);
+}
+
+string llava_context::get_user_input() {
+    vector<char> inp;
+    while(true) {
+        char x;
+        ssize_t r = read(0, &x, 1);
+        if (r <= 0) {
+            break;
         }
+        if (x == '\n') {
+            break;
+        }
+        if (x == 0) {
+            break;
+        }
+        inp.push_back(x);
     }
+    inp.push_back('\n');
+    inp.push_back(0);
+    return inp.data();
 }
 
 struct llama_token_data {
