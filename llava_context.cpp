@@ -337,6 +337,11 @@ int llava_context::run(int argc, char **argv) {
         layers.emplace_back(this, i);
     }
 
+    struct sigaction action{};
+    action.sa_handler = handle_signal;
+    assert(sigaction(SIGINT, &action, nullptr) == 0);
+    assert(sigaction(SIGTERM, &action, nullptr) == 0);
+
     set_batch_size(dec_tokens.size());
 
     // With N = layer count, C = offload stream count, D = total count of layers involved in offloading
@@ -373,6 +378,9 @@ int llava_context::run(int argc, char **argv) {
     }
 
     for (auto& layer : layers) {
+        if (pop_signal() != 0) {
+            return 1;
+        }
         layer.freeze_cache_storage();
         if ((not layer.is_layer_data_offloaded()) or layer.is_offload_main_layer()) {
             layer.freeze_storage();
@@ -380,6 +388,9 @@ int llava_context::run(int argc, char **argv) {
     }
 
     for (auto& layer : layers) {
+        if (pop_signal() != 0) {
+            return 1;
+        }
         if (layer.is_layer_data_offloaded()) {
             layer.load_to_host();
         }
@@ -390,6 +401,9 @@ int llava_context::run(int argc, char **argv) {
     }
 
     for (auto& layer : layers) {
+        if (pop_signal() != 0) {
+            return 1;
+        }
         if (layer.get_offload_id() == layer.layer_id) {
             layer.load_to_gpu();
         }
@@ -399,18 +413,17 @@ int llava_context::run(int argc, char **argv) {
         cerr << "Done copying to GPU" << endl;
     }
 
-    struct sigaction action{
-
-    };
-    action.sa_handler = handle_signal;
-    assert(sigaction(SIGINT, &action, nullptr) == 0);
-
     u32 eos_id = 2;
     uint32_t next_token;
     process_tokens(dec_tokens);
+    cout << prompt << flush;
     next_token = get_last_predicted_token();
     auto start_time = std::chrono::high_resolution_clock::now();
     while (tokens.size() < backlog_size) {
+        if (pop_signal() != 0) {
+            cerr << "Received Ctrl-C" << endl;
+            break;
+        }
         uint32_t token = tokens.size() < dec_tokens.size() ? dec_tokens.at(tokens.size()) : next_token;
         if (token == eos_id) {
             break;
@@ -424,11 +437,8 @@ int llava_context::run(int argc, char **argv) {
         // cout << token_value.data() << " -> " << next_token_value.data() << " (" << token << " -> " << next_token << ")\n";
         cout << token_value.data();
         cout << flush;
-        int recv_sig = pop_signal();
-        if (recv_sig != 0) {
-            break;
-        }
     }
+
     if (next_token != eos_id) {
         vector<char> last_token_value = model->tokens[next_token].text;
         last_token_value.push_back(0);
