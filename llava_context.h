@@ -60,7 +60,7 @@ public:
     llava_pipeline* get_pipeline(const string& shader_name, u32 argument_count);
 
 public:
-    u32 backlog_size = 1024;
+    u32 backlog_size = 512;
     u32 batch_size = 0;
     u32 workgroup_size = 1024;
     specialization_variables_t specialization_variables{};
@@ -137,7 +137,7 @@ private:
     std::mt19937 rng;
     const u32 repeat_last_n = 64;
     const float repeat_penalty = 1.1;
-    const float alpha_frequency = 0.0;
+    const float alpha_frequency = 0.1;
     const float alpha_presence = 0.0;
     const float temp = 0.8;
     const float mirostat_tau = 5.0;

@@ -23,6 +23,12 @@ atomic<uint32_t> sig_w_id = 0;
 atomic<uint32_t> sig_r_id = 0;
 int caught_signals[16] = {0};
 
+u64 get_us() {
+    std::timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((u64)(ts.tv_sec)) * 1000000UL + (((u64)(ts.tv_nsec))/1000UL);
+}
+
 void handle_signal(int signal) {
     u32 index = (sig_w_id++) % 16;
     caught_signals[index] = signal;
@@ -392,8 +398,15 @@ int llava_context::run(int argc, char **argv) {
     process_tokens(dec_tokens);
     cout << prompt << flush;
     next_token = get_last_predicted_token();
-    auto start_time = std::chrono::high_resolution_clock::now();
+    set_batch_size(1);
+    if (command_buffer == nullptr) {
+        command_buffer = new llava_command_buffer(this);
+        command_buffer->record_execution();
+    }
+    u64 total_us_gen = 0;
+    u64 total_us_mr = 0;
     while (tokens.size() < backlog_size) {
+        u64 st = get_us();
         if (pop_signal() != 0) {
             break;
         }
@@ -402,6 +415,7 @@ int llava_context::run(int argc, char **argv) {
             break;
         }
         process_tokens({token});
+        u64 mt = get_us();
         next_token = get_last_predicted_token();
         vector<char> token_value = model->tokens[token].text;
         vector<char> next_token_value = model->tokens[next_token].text;
@@ -410,6 +424,9 @@ int llava_context::run(int argc, char **argv) {
         // cout << token_value.data() << " -> " << next_token_value.data() << " (" << token << " -> " << next_token << ")\n";
         cout << token_value.data();
         cout << flush;
+        u64 et = get_us();
+        total_us_mr += (et - mt);
+        total_us_gen += (mt - st);
     }
 
     if (next_token != eos_id) {
@@ -418,10 +435,10 @@ int llava_context::run(int argc, char **argv) {
         cout << last_token_value.data();
     }
     cout << endl;
-    auto end_time = std::chrono::high_resolution_clock::now();
-    u64 ns = chrono::duration_cast<chrono::nanoseconds>(end_time - start_time).count();
-    cout << (tokens.size() - dec_tokens.size()) << " tokens in " << (ns/1000000) << " milliseconds" << endl;
-    cout << (ns/(1000000*(tokens.size() - dec_tokens.size()))) << " milliseconds per token" << endl;
+    cout << (tokens.size() - dec_tokens.size()) << " tokens in " << (total_us_gen/1000) << " milliseconds" << endl;
+    cout << (total_us_gen/(1000*(tokens.size() - dec_tokens.size()))) << " milliseconds per token" << endl;
+    cout << (tokens.size() - dec_tokens.size()) << " tokens in " << (total_us_mr/1000) << " milliseconds" << endl;
+    cout << (total_us_mr/(1000*(tokens.size() - dec_tokens.size()))) << " milliseconds per token" << endl;
     return 0;
 }
 
@@ -480,9 +497,7 @@ void llava_context::process_tokens(vector<u32> const& token_ids) {
     u32 config[4] = {static_cast<u32>(tokens.size())};
     config_buffer->write_full(&config, ggml_value_type::f32);
     command_buffer->run();
-    for (u32 token_id : token_ids) {
-        tokens.push_back(token_id);
-    }
+    tokens.insert(tokens.end(), token_ids.begin(), token_ids.end());
     queue.waitIdle();
 }
 
@@ -671,7 +686,6 @@ string llava_context::get_user_input() {
 struct llama_token_data {
     u32 id;
     float logit;
-    float p;
 };
 
 u32 llava_context::get_last_predicted_token() {
@@ -689,12 +703,12 @@ u32 llava_context::get_last_predicted_token() {
     std::vector<llama_token_data> candidates;
     candidates.reserve(n_vocab);
     for (u32 token_id = 0; token_id < n_vocab; token_id++) {
-        candidates.emplace_back(llama_token_data{token_id, res[token_id], 0.0f});
+        candidates.emplace_back(llama_token_data{token_id, res[token_id]});
     }
     output_probs->unmap();
 
     for (auto& [tok_id, count] : last_token_count) {
-        if (tok_id == 13) {
+        if (tok_id != 13) {
             continue; // Skip \n
         }
         if(candidates.at(tok_id).logit <= 0) {
@@ -705,44 +719,36 @@ u32 llava_context::get_last_predicted_token() {
         candidates.at(tok_id).logit -= alpha_frequency * float(count) + alpha_presence;
     }
 
-    for (u32 i = 0; i < n_vocab; ++i) {
-        candidates.at(i).logit /= temp;
-    }
-
-    std::sort(candidates.data(), candidates.data() + candidates.size(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
     float total = 0;
     for (u32 i = 0; i < n_vocab; ++i) {
-        candidates.at(i).p = expf(candidates.at(i).logit);
-        total += candidates.at(i).p;
+        candidates.at(i).logit = expf(candidates.at(i).logit / temp);
+        total += candidates.at(i).logit;
     }
 
+    u32 j_w = 0;
     float new_sum = 0.;
-    float cut = powf(2., -mirostat_mu);
+    float cut = powf(0.5, mirostat_mu);
     for (u32 i = 0; i < n_vocab; ++i) {
-        candidates.at(i).p /= total;
-        if (candidates.at(i).p < cut) {
-            candidates.resize(i);
-            break;
-        } else {
-            new_sum += candidates.at(i).p;
+        candidates.at(i).logit /= total;
+        if (candidates.at(i).logit >= cut) {
+            new_sum += candidates.at(i).logit;
+            if (j_w != i) {
+                candidates.at(j_w) = candidates.at(i);
+            }
+            j_w++;
         }
-    }
-    for (auto& tok : candidates) {
-        tok.p /= new_sum;
     }
 
     std::vector<float> probs;
-    probs.reserve(candidates.size());
-    for (auto& tok : candidates) {
-        probs.push_back(tok.p);
+    probs.reserve(j_w);
+    for (u32 i = 0; i < j_w; ++i) {
+        probs.push_back(candidates.at(i).logit);
     }
 
     std::discrete_distribution<> dist(probs.begin(), probs.end());
     int idx = dist(rng);
 
-    mirostat_mu += mirostat_eta * (mirostat_tau + log2f(candidates.at(idx).p));
+    mirostat_mu += mirostat_eta * (mirostat_tau + log2f(candidates.at(idx).logit / new_sum));
 
     return candidates.at(idx).id;
 }

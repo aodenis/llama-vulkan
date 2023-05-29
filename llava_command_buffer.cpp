@@ -1,3 +1,4 @@
+#include <iostream>
 #include "llava_command_buffer.h"
 #include "llava_context.h"
 #include "utils.h"
