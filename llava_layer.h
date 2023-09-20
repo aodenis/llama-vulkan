@@ -4,11 +4,19 @@
 #include "types.h"
 
 class llava_layer {
-    friend class llava_context;
 public:
     llava_layer(llava_context* context, u32 layer_id);
+    llava_layer(llava_layer const&) = delete;
+    llava_layer(llava_layer&) = delete;
+    llava_layer(llava_layer&&) noexcept;
     ~llava_layer();
-    vk::Event execute(llava_context* ctx, vk::Event last_event);
+    llava_buffer* execute(llava_command_buffer *cmd_buf, llava_layer_session_data* layer_data, llava_buffer* raw_input_logit) const;
+    void freeze_storage();
+    void load_to_gpu();
+
+public:
+    u32 const layer_id;
+    llava_context* const context;
 
 private:
     llava_device_memory* layer_allocation;
@@ -21,8 +29,9 @@ private:
     llava_buffer* feed_forward_w3;
     llava_buffer* attention_norm;
     llava_buffer* ffn_norm;
-    llava_buffer* k_cache;
-    llava_buffer* v_cache;
+
+private:
+    u8* raw_layer = nullptr;
 };
 
-#endif //VULKAN_LLAMA_LLAVA_LAYER_H
+#endif

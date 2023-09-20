@@ -9,23 +9,22 @@ as it requires extra libraries and does not produce faster shaders.
 Vulkan 1.2 is used and no extension is required.
 
 ## Currently working
-* Tokenizer
-* GGML parsing and mapping for q4_0 models
-* Evaluation of 7B and 13B models
 
-## TODO
-* Support for memory swapping
-* Faster initialization
-* Proper interface
-* Support for more models
-* Support for more GPUs
-* Optimizations
+* Tokenizer
+* GGML parsing and mapping for q4_0, q8_0 models
+* Evaluation of 7B models
+
+## Known issues
+
+* Evaluation 13B models fail due to a NaN value corrupting the shader values. This is being fixed
+* Threading (for server mode) uses mutex and may deadlock
+* Too many asserts can fire
 
 ## Setup
 
 Building prebuilt shaders:
 ```bash
-./prebuild_shaders.sh
+./prebuild_shaders.py
 ```
 
 
@@ -40,3 +39,4 @@ cd .. && ./build/vulkan_llama --help
 ## Testing hardware
 
 * AMD Ryzen 7 6800U with Radeon Graphics (AMD Radeon 680M)
+* AMD Radeon RX 6900 XT

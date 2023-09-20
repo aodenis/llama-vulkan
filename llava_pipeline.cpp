@@ -1,22 +1,26 @@
 #include "llava_pipeline.h"
 #include "llava_context.h"
+#include "llava_session.h"
+#include "utils.h"
+#include <utility>
 #include <vulkan/vulkan.hpp>
 #include <fcntl.h>
 #include <unistd.h>
 #include <iostream>
 #ifdef RUNTIME_BUILD_ENABLED
-#include <utility>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 #endif
 
-
 vector<char> slurp_file(const string& path) {
     int fd = open(path.c_str(), O_RDONLY);
     if (fd < 0) {
-        cerr << "Cannot read " << path << endl;
-        exit(1);
+#ifndef EMBEDDED_SPV
+        int errsv = errno;
+        cerr << "open failed on" << path << ": " << strerror(errsv) << endl;
+#endif
+        return {};
     }
     vector<char> out;
     while(true) {
@@ -180,11 +184,12 @@ static TBuiltInResource default_resources(llava_context* ctx)
 #endif
 
 llava_pipeline::llava_pipeline(llava_context* ctx,
-                               const string& _shader_name,
+                               string _shader_name,
+                               specialization_variables_t const& spevar,
                                bool use_prebuilt_shaders,
-                               uint32_t argument_count) : argcount(argument_count),
+                               uint32_t argument_count) : argument_count(argument_count),
                                                           context(ctx),
-                                                          shader_name(_shader_name) {
+                                                          shader_name(std::move(_shader_name)) {
     vector<vk::DescriptorSetLayoutBinding> bindings;
     bindings.reserve(argument_count);
     while(bindings.size() < argument_count) {
@@ -195,20 +200,41 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
     pipelineLayout = ctx->get_device().createPipelineLayout({{}, 1, &descriptorSetLayout});
 
     if (use_prebuilt_shaders) {
-        vector<char> spirv = slurp_file(string("prebuilt_shaders/") + shader_name + ".spv");
-        shaderModule = ctx->get_device().createShaderModule({{}, (u32)(spirv.size()), (uint32_t *)(spirv.data())});
+        string spirv_path = string("prebuilt_shaders/") + shader_name + ".spv";
+        vector<char> spirv = slurp_file(spirv_path);
+        u32 data_size = spirv.size();
+        u32* data_ptr = (uint32_t *)spirv.data();
+
+        if (data_size == 0) {
+            auto position = ctx->get_shader_spirv_by_name(shader_name);
+            if (position.first) {
+                data_ptr = position.first;
+                data_size = position.second;
+            }
+        }
+
+        if (data_size == 0) {
+#ifdef EMBEDDED_SPV
+            cerr << "Cannot read " << spirv_path << endl;
+#else
+            cerr << "Cannot read " << spirv_path << " and cannot find shader " << shader_name << " in embedded shaders" << endl;
+#endif
+            exit(1);
+        }
+
+        shaderModule = ctx->get_device().createShaderModule({{}, data_size, data_ptr});
 
         vector<vk::SpecializationMapEntry> entries;
         for (u32 i = 0; i * 4 < sizeof (specialization_variables_t); ++i) {
             entries.emplace_back(i, i * 4, 4);
         }
-        vk::SpecializationInfo speInfo(entries.size(), entries.data(), sizeof(specialization_variables_t), &(context->specialization_variables));
+        vk::SpecializationInfo speInfo(entries.size(), entries.data(), sizeof(specialization_variables_t), &spevar);
         pipeline = ctx->get_device().createComputePipeline(ctx->get_pipeline_cache(),
                                                            {{}, {{}, vk::ShaderStageFlagBits::eCompute, shaderModule, "main", &speInfo}, pipelineLayout}).value;
     } else {
 #ifdef RUNTIME_BUILD_ENABLED
         vector<string> little_source_paths;
-        little_source_paths.emplace_back(shader_name + ".glsl");
+        little_source_paths.emplace_back(shader_name + ".comp");
 
         vector<vector<char>> shader_sources;
         shader_sources.reserve(little_source_paths.size());
@@ -236,7 +262,7 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
         shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_2);
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_4);
 
-        CustomIncluder includer(ctx->generate_spevar_define_string());
+        CustomIncluder includer(ctx->generate_spevar_define_string(&spevar));
         TBuiltInResource resources = default_resources(ctx);
 
         auto messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
@@ -245,7 +271,7 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
             cerr << "Shader preprocessing failed" << endl;
             cerr << shader.getInfoLog() << endl;
             cerr << shader.getInfoDebugLog() << endl;
-            exit(-1);
+            exit(1);
         }
 
         const char* preprocessedShaderStrings[1] = { preprocessedSource.c_str() };
@@ -255,13 +281,16 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
             cerr << "Shader parsing failed" << endl;
             cerr << shader.getInfoLog() << endl;
             cerr << shader.getInfoDebugLog() << endl;
-            exit(-1);
+            exit(1);
         }
 
         glslang::TProgram program;
         program.addShader(&shader);
         if (!program.link(messages)) {
             cerr << "Shader linking failed" << endl;
+            cerr << program.getInfoLog() << endl;
+            cerr << program.getInfoDebugLog() << endl;
+            assert(false);
         }
         vector<uint32_t> spirv;
         glslang::GlslangToSpv(*program.getIntermediate(EShLanguage::EShLangCompute), spirv);
@@ -271,7 +300,7 @@ llava_pipeline::llava_pipeline(llava_context* ctx,
                                                            {{}, {{}, vk::ShaderStageFlagBits::eCompute, shaderModule, "main", nullptr}, pipelineLayout}).value;
 #else
         cerr << "[!] Runtime shader compilation is not enabled!" << endl;
-        exit(-1);
+        exit(1);
 #endif
     }
 }

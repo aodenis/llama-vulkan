@@ -1,4 +1,5 @@
 #extension GL_EXT_control_flow_attributes:enable
+#extension GL_EXT_shader_16bit_storage:enable
 
 #ifdef USE_SPEVAR
 
@@ -22,6 +23,7 @@ layout (constant_id = 16) const uint MATMUL_FF_ROW_WORKER_COUNT = 128;
 layout (constant_id = 17) const uint MATMUL_FF_ROW_WORKER_COUNT_LOG2 = 7;
 layout (constant_id = 18) const uint MATMUL_FF_Q4_BLOCK_COUNT_PER_WORKER = 3;
 layout (constant_id = 19) const uint MATMUL_FF_Q4_BLOCKS_PER_ROW = 344;
+layout (constant_id = 20) const uint BATCH_ENABLED = 1;
 
 #define HEAD_COUNT_CID 0
 #define QUARTERROT_CID 1
@@ -43,6 +45,7 @@ layout (constant_id = 19) const uint MATMUL_FF_Q4_BLOCKS_PER_ROW = 344;
 #define MATMUL_FF_ROW_WORKER_COUNT_LOG2_CID 17
 #define MATMUL_FF_Q4_BLOCK_COUNT_PER_WORKER_CID 18
 #define MATMUL_FF_Q4_BLOCKS_PER_ROW_CID 19
+#define BATCH_ENABLED_CID 20
 
 #else
 

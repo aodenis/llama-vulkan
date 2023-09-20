@@ -1,26 +1,37 @@
 #include "llava_context.h"
 #include "llava_pipeline.h"
-#include "llava_buffer.h"
 #include "llava_device_memory.h"
 #include "llava_layer.h"
+#include "llava_command_buffer.h"
+#include "llava_session.h"
 #include "utils.h"
 #include <iostream>
-#include <chrono>
+#include <csignal>
 #include <vulkan/vulkan.hpp>
 #include "ggml_file.h"
+#include "server/server.h"
 #include <cmath>
 #include <set>
+#include <sys/signalfd.h>
 
 #ifdef RUNTIME_BUILD_ENABLED
 #include <glslang/Public/ShaderLang.h>
 #endif
 
-struct shared_state {
-    u32 token_count;
-    u32 dim;
-    u32 pad1;
-    u32 pad2;
-};
+#ifdef EMBEDDED_SPV
+llava_context::llava_context() {
+    auto const* packed_data = (packed_data_t const*)(raw_packed_shaders);
+    auto const* packed_data_as_char = (char const*)(raw_packed_shaders);
+    for (u32 i = 0; i < packed_data->count; i++) {
+        auto& entry = packed_data->entries[i];
+        assert((entry.data_offset % 4) == 0);
+        string shader_name(packed_data_as_char + entry.name_offset);
+        embedded_shaders.emplace(shader_name, pair((u32*)(raw_packed_shaders + entry.data_offset), entry.data_length + 0));
+    }
+}
+#else
+llava_context::llava_context() = default;
+#endif
 
 vk::PhysicalDevice llava_context::find_suitable_physical_device() {
     auto physical_devices = vulkan_instance.enumeratePhysicalDevices();
@@ -58,39 +69,7 @@ vk::PhysicalDevice& llava_context::get_physical_device() {
 
 llava_context::~llava_context() {
     named_pipelines.clear();
-    command_buffer.clear();
-    command_buffer_raw.clear();
     layers.clear();
-    delete current_thought;
-    delete current_thought_sublayer;
-    delete current_Q;
-    delete current_thought_middle_normd;
-    delete current_K;
-    delete current_V;
-    delete current_Vout;
-    delete attn_result;
-    delete config_buffer;
-    delete norm_w;
-    delete output_w;
-    delete output_probs;
-    delete properties_mask;
-    delete properties_associated_values;
-    delete main_buffer_memory;
-    current_thought = nullptr;
-    current_thought_sublayer = nullptr;
-    current_thought_middle_normd = nullptr;
-    current_Q = nullptr;
-    current_K = nullptr;
-    current_V = nullptr;
-    current_Vout = nullptr;
-    attn_result = nullptr;
-    config_buffer = nullptr;
-    norm_w = nullptr;
-    output_w = nullptr;
-    output_probs = nullptr;
-    properties_mask = nullptr;
-    properties_associated_values = nullptr;
-    main_buffer_memory = nullptr;
 
     if (device) {
         device.destroy(command_pool);
@@ -101,24 +80,19 @@ llava_context::~llava_context() {
         pipeline_cache = nullptr;
         device.destroy();
     }
-
+    queue = nullptr;
+    physical_device = nullptr;
     device = nullptr;
     if (vulkan_instance) {
         vulkan_instance.destroy();
     }
 
     vulkan_instance = nullptr;
-}
-
-u32 ulog2(u32 n) {
-    assert (n != 0);
-    u32 i = 0;
-    while (((n & 1) == 0)) {
-        n >>= 1;
-        i++;
+    delete model;
+    if (sigfd != -1) {
+        close(sigfd);
+        sigfd = -1;
     }
-    assert(n == 1);
-    return i;
 }
 
 u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical_device) {
@@ -158,6 +132,11 @@ u32 llava_context::find_suitable_memory_type(vk::PhysicalDevice const& _physical
 u32 llava_context::find_suitable_queue_index() {
     vector<vk::QueueFamilyProperties> queueFamilyProperties = physical_device.getQueueFamilyProperties();
     for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+        if ((queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) and ((queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eGraphics) != vk::QueueFlagBits::eGraphics)) {
+            return i;
+        }
+    }
+    for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
         if (queueFamilyProperties.at(i).queueFlags & vk::QueueFlagBits::eCompute) {
             return i;
         }
@@ -165,10 +144,16 @@ u32 llava_context::find_suitable_queue_index() {
     return ~0U;
 }
 
+bool streq(const char* a1, const char* a2) {
+    return (strcmp(a1, a2) == 0);
+}
+
 int llava_context::run(int argc, char **argv) {
 #ifndef RUNTIME_BUILD_ENABLED
     use_prebuilt_shaders = true;
 #endif
+    bool server_mode = false;
+    bool controlled = false;
     bool debug_mode = false;
     bool only_print_header = false;
     string model_path;
@@ -178,14 +163,14 @@ int llava_context::run(int argc, char **argv) {
     for (u32 i = 1; i < argc; ++i) {
         if (string(argv[i]) == "--use-prebuilt") {
             use_prebuilt_shaders = true;
-        } else if (string(argv[i]) == "--debug") {
+        } else if (streq(argv[i], "--debug")) {
             debug_mode = true;
-        } else if (string(argv[i]) == "--print_header") {
+        } else if (streq(argv[i], "--print_header")) {
             only_print_header = true;
-        } else if (string(argv[i]) == "--model" or string(argv[i]) == "-m") {
+        } else if (streq(argv[i], "--model") or streq(argv[i], "-m")) {
             if (i + 1 >= argc) {
                 cerr << "[!] Expected model path after " << argv[i] << endl;
-                exit(-1);
+                exit(1);
             }
             if (model_path_provided) {
                 cerr << "[!] -m or --model duplicated in the command line" << endl;
@@ -193,19 +178,30 @@ int llava_context::run(int argc, char **argv) {
             model_path_provided = true;
             ++i;
             model_path = argv[i];
-        } else if (string(argv[i]) == "--help" or string(argv[i]) == "-h") {
-            cout << (argc ? argv[0] : "./llama_vulkan") << " [-h] [-m model_name.bin] [prompt]" << endl;
+        } else if (streq(argv[i], "--help") or streq(argv[i], "-h")) {
+            cout << (argc ? argv[0] : "./llama_vulkan") << " [-h] [-m model_name.bin] [prompt] [-r]" << endl;
             exit(0);
-        } else if (string(argv[i]) == "--verbose" or string(argv[i]) == "-v") {
+        } else if (streq(argv[i], "--verbose") or streq(argv[i], "-v")) {
             verbosity++;
+        } else if (streq(argv[i], "--control") or streq(argv[i], "-c")) {
+            controlled = true;
+        } else if (streq(argv[i], "--server") or streq(argv[i], "-s")) {
+            server_mode = true;
+        } else if (streq(argv[i], "--sigdebug")) {
+            signal_debug = true;
         } else {
             if (i + 1 != argc) {
                 cerr << "[!] Unexpected argument " << argv[i] << endl;
-                exit(-1);
+                exit(1);
             } else {
                 prompt = argv[i];
             }
         }
+    }
+
+    if (controlled) {
+        cerr << "Control disabled for now" << endl;
+        exit(1);
     }
 
     if (model_path.empty()) {
@@ -217,21 +213,18 @@ int llava_context::run(int argc, char **argv) {
 
     if (model_path.empty()) {
         cerr << "[!] No model path provided" << endl;
-        exit(-1);
+        exit(1);
     }
 
-    model = std::make_shared<ggml_file>(model_path.c_str());
+    model = new ggml_file(model_path.c_str());
+
+    if (not model->is_open()) {
+        return 1;
+    }
 
     if (only_print_header) {
         model->print_info();
         return 0;
-    }
-
-    vector<u32> dec_tokens;
-    model->tokenize(dec_tokens, prompt, true);
-    if (dec_tokens.size() >= backlog_size) {
-        cerr << "[!] Prompt overflows backlog buffer !" << endl;
-        exit(-1);
     }
 
     vk::ApplicationInfo applicationInfo("llava", 1, "llava0", 1, VK_API_VERSION_1_2);
@@ -244,11 +237,17 @@ int llava_context::run(int argc, char **argv) {
     // create an Instance
     vulkan_instance = vk::createInstance({{}, &applicationInfo, enabled_layers});
     physical_device = find_suitable_physical_device();
+    if (verbosity) {
+        cout << "Selected device: " << physical_device.getProperties().deviceName << endl;
+    }
 
     queueFamilyIndex = find_suitable_queue_index();
     if (!~queueFamilyIndex) {
         cerr << "[!] No compute queue family found on selected device" << endl;
         return 1;
+    }
+    if (verbosity >= 2) {
+        cout << "Selected queue: " << queueFamilyIndex << endl;
     }
 
     mainMemoryTypeIndex = find_suitable_memory_type(physical_device);
@@ -259,127 +258,124 @@ int llava_context::run(int argc, char **argv) {
 
     this->workgroup_size = physical_device.getProperties().limits.maxComputeWorkGroupInvocations;
     ulog2(this->workgroup_size); // Assert it is a pow2
-    if (verbosity) {
-        cout << "Selected device: " << physical_device.getProperties().deviceName << endl;
-    }
 
     // create a Device
     float queuePriority = 0.0f;
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo(vk::DeviceQueueCreateFlags(), queueFamilyIndex, 1, &queuePriority);
-    device = physical_device.createDevice({vk::DeviceCreateFlags(), deviceQueueCreateInfo});
+    vk::PhysicalDevice16BitStorageFeatures features16bit;
+    features16bit.storageInputOutput16 = false;
+    features16bit.uniformAndStorageBuffer16BitAccess = false;
+    features16bit.storageBuffer16BitAccess = true;
+    device = physical_device.createDevice(vk::DeviceCreateInfo(vk::DeviceCreateFlags(), deviceQueueCreateInfo, {}, {}, {}, &features16bit));
 
     // create a CommandPool to allocate a CommandBuffer from
     command_pool = device.createCommandPool({{}, queueFamilyIndex});
 
     // Descriptor pool
-    vk::DescriptorPoolSize descriptorPoolSize(vk::DescriptorType::eStorageBuffer, 2048);
+    vk::DescriptorPoolSize descriptorPoolSize(vk::DescriptorType::eStorageBuffer, 4096 * 16);
     descriptor_pool = device.createDescriptorPool({vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-                                                   2048, 1, &descriptorPoolSize});
+                                                   descriptorPoolSize.descriptorCount, 1, &descriptorPoolSize});
     // Queue
     queue = device.getQueue(queueFamilyIndex, 0);
 
     // Pipeline cache
     pipeline_cache = device.createPipelineCache({{}, 0, nullptr});
 
+    if (not setup_signal_handling()) {
+        cerr << "[!] Cannot setup signal handling" << endl;
+        return 1;
+    }
+
+    layers.reserve(model->header.n_layers);
+    for (u32 i = 0; i < model->header.n_layers; ++i) {
+        layers.emplace_back(this, i);
+    }
+
+    for (auto& layer : layers) {
+        if (pop_signal()) {
+            return 1;
+        }
+        layer.freeze_storage();
+    }
+
+    {
+        list<u32> layers_to_load;
+        mutex gpu_load_mutex;
+        for (auto& layer : layers) {
+            layers_to_load.push_back(layer.layer_id);
+        }
+        vector<thread> gpu_load_threads;
+        for(u32 i = 0; i < 8; ++i) {
+            gpu_load_threads.emplace_back([this, &layers_to_load, &gpu_load_mutex](){
+                while (true) {
+                    u32 to_load;
+                    {
+                        lock_guard guard(gpu_load_mutex);
+                        if(layers_to_load.empty()) {
+                            break;
+                        }
+                        to_load = layers_to_load.front();
+                        layers_to_load.pop_front();
+                    }
+                    this->layers.at(to_load).load_to_gpu();
+                }
+            });
+        }
+        for (auto& t : gpu_load_threads) {
+            t.join();
+        }
+    }
+
 #ifdef RUNTIME_BUILD_ENABLED
     glslang::InitializeProcess();
 #endif
 
-    // Compute specialization variables
-    u32 dim = model->header.dim;
-    assert(model->ff_size % 32 == 0);
-    assert(dim % 32 == 0);
-    assert(workgroup_size % backlog_size == 0);
-    assert(model->header.rot > 2);
-
-    specialization_variables.head_count = model->header.n_heads;
-    specialization_variables.rot = model->header.rot;
-    specialization_variables.quarterrot = model->header.rot / 4;
-    specialization_variables.rot_bits = ulog2(model->header.rot);
-
-    specialization_variables.backlog = backlog_size;
-    specialization_variables.max_wgs = this->workgroup_size;
-    specialization_variables.max_wgs_bits = ulog2(this->workgroup_size);
-    specialization_variables.softmax_head_per_wavefront = workgroup_size / backlog_size;
-    specialization_variables.ff_size = model->ff_size;
-    specialization_variables.backlog_bits = ulog2(backlog_size);
-
-    if (dim == 4096) {
-        specialization_variables.matmul_dim_row_worker_count = 128;
-    } else if (dim == 5120) {
-        specialization_variables.matmul_dim_row_worker_count = 32;
+    if (server_mode) {
+        lsrv::llava_server server(this);
+        server.serve_forever();
     } else {
-        assert(false);
-    }
+        u32 eos_id = 2;
+        llava_session session(this);
 
-    assert((workgroup_size % specialization_variables.matmul_dim_row_worker_count) == 0);
-    specialization_variables.matmul_dim_row_per_wavefront = workgroup_size / specialization_variables.matmul_dim_row_worker_count;
-    specialization_variables.matmul_dim_row_worker_count_log2 = ulog2(specialization_variables.matmul_dim_row_worker_count);
-    specialization_variables.matmul_dim_q4_blocks_per_row = model->header.dim / 32;
-    specialization_variables.matmul_dim_q4_block_count_per_worker = updiv(specialization_variables.matmul_dim_q4_blocks_per_row, specialization_variables.matmul_dim_row_worker_count);
-
-    if ((model->ff_size == 11008) or (model->ff_size == 13824)) {
-        specialization_variables.matmul_ff_row_worker_count = 128;
-    } else {
-        assert(false);
-    }
-    assert((workgroup_size % specialization_variables.matmul_ff_row_worker_count) == 0);
-    specialization_variables.matmul_ff_row_per_wavefront = workgroup_size / specialization_variables.matmul_ff_row_worker_count;
-    specialization_variables.matmul_ff_row_worker_count_log2 = ulog2(specialization_variables.matmul_ff_row_worker_count);
-    specialization_variables.matmul_ff_q4_blocks_per_row = model->ff_size / 32;
-    specialization_variables.matmul_ff_q4_block_count_per_worker = updiv(specialization_variables.matmul_ff_q4_blocks_per_row, specialization_variables.matmul_dim_row_worker_count);
-
-    main_buffer_memory = new llava_device_memory(this);
-    current_thought = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    current_thought_sublayer = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    current_thought_middle_normd = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    properties_mask = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
-    properties_associated_values = new llava_buffer(this, ggml_value_type::f32, model->ff_size, 1, main_buffer_memory);
-    current_Q = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    current_K = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    attn_result = new llava_buffer(this, ggml_value_type::f32, backlog_size, model->header.n_heads, main_buffer_memory);
-    config_buffer = new llava_buffer(this, ggml_value_type::f32, sizeof(shared_state) / sizeof(float), 1, main_buffer_memory);
-    current_V = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    current_Vout = new llava_buffer(this, ggml_value_type::f32, model->header.dim, 1, main_buffer_memory);
-    norm_w = new llava_buffer(this, model->get_buffer_descriptor("norm"), main_buffer_memory);
-    output_w = new llava_buffer(this, model->get_buffer_descriptor("output"), main_buffer_memory);
-    output_probs = new llava_buffer(this, ggml_value_type::f32, model->header.vocab_size, 1, main_buffer_memory);
-    main_buffer_memory->freeze();
-
-    for (u32 i = 0; i < model->header.n_layers; ++i) {
-        layers.emplace_back(this, i);
-    }
-    u32 eos_id = 2;
-    record_execution(nullptr);
-    uint32_t next_token = 0;
-    auto start_time = std::chrono::high_resolution_clock::now();
-    while (tokens.size() < backlog_size) {
-        reset_command_buffer_events();
-        uint32_t token = tokens.size() < dec_tokens.size() ? dec_tokens.at(tokens.size()) : next_token;
-        if (token == eos_id) {
-            break;
+        if (not session.set_text(prompt)) {
+            cerr << "[!] System prompt overflows backlog buffer !" << endl;
+            exit(1);
         }
-        process_token(token);
-        queue.waitIdle();
-        next_token = get_last_predicted_token();
-        vector<char> token_value = model->tokens[token].text;
-        vector<char> next_token_value = model->tokens[next_token].text;
-        token_value.push_back(0);
-        next_token_value.push_back(0);
-        // cout << token_value.data() << " -> " << next_token_value.data() << " (" << token << " -> " << next_token << ")\n";
-        cout << token_value.data();
-        cout << flush;
+
+        cout << prompt << flush;
+        u32 next_token = session.predict_next_token();
+        while (true) {
+            if (~next_token == 0) {
+                cerr << "Unknown error" << endl;
+                break;
+            }
+            if (pop_signal() or (next_token == eos_id)) {
+                break;
+            }
+
+            if (not session.push_token(next_token)) {
+                break; // Too many tokens
+            }
+
+            if (not session.start_next_token_prediction()) {
+                cerr << "Cannot start processing, unknown error" << endl;
+                break;
+            }
+            cout << model->tokens[next_token].text << flush;
+            next_token = session.finish_next_token_prediction();
+        }
+
+        if (next_token != eos_id) {
+            cout << model->tokens[next_token].text;
+        }
+
+        cout << endl;
     }
-    if (next_token != eos_id) {
-        vector<char> last_token_value = model->tokens[next_token].text;
-        last_token_value.push_back(0);
-        cout << last_token_value.data();
-    }
-    cout << endl;
-    auto end_time = std::chrono::high_resolution_clock::now();
-    u64 ns = chrono::duration_cast<chrono::nanoseconds>(end_time - start_time).count();
-    cout << tokens.size() << " tokens in " << (ns/1000000) << " milliseconds" << endl;
-    cout << (ns/(1000000*tokens.size())) << " milliseconds per token" << endl;
+
+#ifdef RUNTIME_BUILD_ENABLED
+    glslang::FinalizeProcess();
+#endif
+
     return 0;
 }
 
@@ -403,217 +399,152 @@ vk::PipelineCache& llava_context::get_pipeline_cache() {
     return pipeline_cache;
 }
 
-shared_ptr<ggml_file> llava_context::get_model() {
-    assert(model != nullptr);
+ggml_file const* llava_context::get_model() const {
+    assert(model);
     return model;
 }
 
-llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argcount) {
-    auto it = named_pipelines.find(shader_name);
+using pipeline_signature = pair<string, specialization_variables_t>;
+
+std::weak_ordering operator<=>(const pipeline_signature &lhs, const pipeline_signature &rhs) {
+    auto f = lhs.first <=> rhs.first;
+    if(f != std::weak_ordering::equivalent) {
+        return f;
+    }
+    int r = memcmp(&lhs.second, &rhs.second, sizeof(rhs.second));
+    if (r < 0) {
+        return std::weak_ordering::less;
+    }
+    if (r == 0) {
+        return std::weak_ordering::equivalent;
+    }
+    return std::weak_ordering::greater;
+}
+
+llava_pipeline *llava_context::get_pipeline(const string &shader_name, u32 argument_count, specialization_variables_t const& spevars) {
+    lock_guard guard(pipeline_mutex);
+    pair<string, specialization_variables_t> signature(shader_name, spevars);
+    auto it = named_pipelines.find(signature);
     if (it != named_pipelines.end()) {
-        assert (it->second.argcount == argcount);
+        assert (it->second.argument_count == argument_count);
         return &it->second;
     }
 
-    it = named_pipelines.emplace(std::piecewise_construct, forward_as_tuple(shader_name), forward_as_tuple(this, shader_name, use_prebuilt_shaders, argcount)).first;
+    it = named_pipelines.emplace(std::piecewise_construct, std::forward_as_tuple(signature), forward_as_tuple(this, shader_name, spevars, use_prebuilt_shaders, argument_count)).first;
     return &it->second;
 }
 
-void llava_context::process_token(u32 token_id) {
-    assert(token_id < model->tokens.size());
-
-    ggml_data_descriptor const& descriptor = model->get_buffer_descriptor("tok_embeddings");
-    assert((descriptor.size % model->tokens.size()) == 0);
-    current_thought->write_full(model->mapping + (descriptor.offset + token_id * (descriptor.size / model->tokens.size())), descriptor.ftype);
-
-    shared_state config {
-        .token_count = static_cast<u32>(tokens.size()),
-        .dim = model->header.dim,
-    };
-    config_buffer->write_full(&config, ggml_value_type::f32);
-    tokens.push_back(token_id);
-    vk::SubmitInfo submitInfo({}, {}, command_buffer_raw, {});
-    queue.submit({submitInfo});
-    queue.waitIdle();
+vk::Queue &llava_context::get_queue() {
+    assert(queue);
+    return queue;
 }
 
-vk::Event llava_context::record_execution(vk::Event startEvent) {
-    command_buffer_raw.clear();
-    command_buffer.clear();
-
-    for (auto& layer : layers) {
-        startEvent = layer.execute(this, {startEvent});
-    }
-
-    startEvent = normalize_logit(current_thought_sublayer, current_thought, norm_w, {startEvent});
-    startEvent = matmul(output_probs, output_w, current_thought_sublayer, {startEvent});
-
-    command_buffer_raw.reserve(command_buffer.size());
-    for (auto& command : command_buffer) {
-        command_buffer_raw.push_back(command.commandBuffer);
-    }
-    return startEvent;
+vector<llava_layer>& llava_context::get_layers() {
+    return layers;
 }
 
-u32 llava_context::get_last_predicted_token() const {
-    auto* res = static_cast<float *>(device.mapMemory(output_probs->device_memory->device_memory, output_probs->get_sub_buffers().front().offset, output_probs->get_sub_buffers().front().size));
-    u32 best = 0;
-    for(uint32_t i = 1; i < model->header.vocab_size; ++i) {
-        if (res[i] > res[best]) {
-            best = i;
+string llava_context::generate_spevar_define_string(specialization_variables_t const* spevars) {
+    stringstream ss;
+    ss << "#define HEAD_COUNT " << spevars->head_count << "\n";
+    ss << "#define QUARTERROT " << spevars->quarterrot << "\n";
+    ss << "#define BACKLOG " << spevars->backlog << "\n";
+    ss << "#define MAX_WGS " << spevars->max_wgs << "\n";
+    ss << "#define MAX_WGS_BITS " << spevars->max_wgs_bits << "\n";
+    ss << "#define FF_SIZE " << spevars->ff_size << "\n";
+    ss << "#define SOFTMAX_HEAD_PER_WAVEFRONT " << spevars->softmax_head_per_wavefront << "\n";
+    ss << "#define BACKLOG_BITS " << spevars->backlog_bits << "\n";
+    ss << "#define ROT_BITS " << spevars->rot_bits << "\n";
+    ss << "#define ROT " << spevars->rot << "\n";
+    ss << "#define MATMUL_DIM_ROW_PER_WAVEFRONT " << spevars->matmul_dim_row_per_wavefront << "\n";
+    ss << "#define MATMUL_DIM_ROW_WORKER_COUNT " << spevars->matmul_dim_row_worker_count << "\n";
+    ss << "#define MATMUL_DIM_ROW_WORKER_COUNT_LOG2 " << spevars->matmul_dim_row_worker_count_log2 << "\n";
+    ss << "#define MATMUL_DIM_Q4_BLOCK_COUNT_PER_WORKER " << spevars->matmul_dim_q4_block_count_per_worker << "\n";
+    ss << "#define MATMUL_DIM_Q4_BLOCKS_PER_ROW " << spevars->matmul_dim_q4_blocks_per_row << "\n";
+    ss << "#define MATMUL_FF_ROW_PER_WAVEFRONT " << spevars->matmul_ff_row_per_wavefront << "\n";
+    ss << "#define MATMUL_FF_ROW_WORKER_COUNT " << spevars->matmul_ff_row_worker_count << "\n";
+    ss << "#define MATMUL_FF_ROW_WORKER_COUNT_LOG2 " << spevars->matmul_ff_row_worker_count_log2 << "\n";
+    ss << "#define MATMUL_FF_Q4_BLOCK_COUNT_PER_WORKER " << spevars->matmul_ff_q4_block_count_per_worker << "\n";
+    ss << "#define MATMUL_FF_Q4_BLOCKS_PER_ROW " << spevars->matmul_ff_q4_blocks_per_row << "\n";
+    ss << "#define BATCH_ENABLED " << spevars->batch_enabled << "\n";
+    return ss.str();
+}
+
+bool llava_context::setup_signal_handling() {
+    if(signal_debug) {
+        return true;
+    }
+
+    if (sigfd != -1) {
+        return true;
+    }
+    sigset_t mask;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGQUIT);
+    sigaddset(&mask, SIGHUP);
+
+    if (sigprocmask(SIG_BLOCK, &mask, nullptr) < 0) {
+       perror("sigprocmask");
+       return false;
+    }
+
+    sigfd = signalfd(-1, &mask, 0);
+    if (sigfd == -1) {
+       perror("signalfd");
+       return false;
+    }
+
+    return true;
+}
+
+u32 llava_context::pop_signal(bool blocking) const {
+    if (sigfd == -1) {
+        if (not signal_debug) {
+            cerr << "[?] pop_signal called but sigfd is unset" << endl;
+            exit(1);
+        } else return 0;
+    }
+
+    if (not blocking) {
+        pollfd pfd{
+            .fd = sigfd,
+            .events = POLLIN,
+            .revents = 0
+        };
+        int pollret = poll(&pfd, 1, 0);
+        if (pollret == 0) {
+            return 0;
+        }
+        if (pollret != 1) {
+            perror("poll");
+            return 0; // Either failed (wtf) or returned more than passed as arg (wtf)
         }
     }
-    device.unmapMemory(output_probs->device_memory->device_memory);
-    return best;
+
+    signalfd_siginfo fdsi{};
+    if (read_noshort(sigfd, &fdsi, sizeof(fdsi)) < sizeof(fdsi)) {
+        cerr << "[*] Short read on signal fd, wtf" << endl;
+        exit(1);
+    }
+    return fdsi.ssi_signo;
 }
 
-vk::Event llava_context::normalize_logit(llava_buffer* outbuf, llava_buffer* inbuf, llava_buffer* weights, initializer_list<vk::Event> events) {
-    return record_command("normalize", {outbuf, inbuf, weights}, events, 1);
+int llava_context::get_signal_fd() const {
+    return sigfd;
 }
 
-vk::Event llava_context::matmul(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(inbuf->shape.first == matrix->shape.second);
-    assert(outbuf->shape.first == matrix->shape.first);
-    assert(inbuf->shape.second == 1);
-    assert(outbuf->shape.second == 1);
-
-    if (inbuf->shape.first == model->header.dim) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-        return record_command("matmul_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
-    } else if (inbuf->shape.first == model->ff_size) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
-        return record_command("matmul_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
-    } else {
-        assert(false);
+pair<u32 *, u32> llava_context::get_shader_spirv_by_name(const string &shader_name) {
+    auto it = embedded_shaders.find(shader_name);
+    if (it == embedded_shaders.end()) {
+        return {nullptr, 0};
+    }
+    else {
+        return it->second;
     }
 }
 
-vk::Event llava_context::matmul_add_inplace(llava_buffer* outbuf, llava_buffer* matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(inbuf->shape.first == matrix->shape.second);
-    assert(outbuf->shape.first == matrix->shape.first);
-    assert(inbuf->shape.second == 1);
-    assert(outbuf->shape.second == 1);
-
-    if (inbuf->shape.first == model->header.dim) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-        return record_command("matmul_add_dim", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
-    } else if (inbuf->shape.first == model->ff_size) {
-        assert(outbuf->shape.first % (4 * specialization_variables.matmul_ff_row_per_wavefront) == 0);
-        return record_command("matmul_add_ff", {outbuf, matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_ff_row_per_wavefront * 4));
-    } else {
-        assert(false);
-    }
-}
-
-vk::Event llava_context::matmul_silu_ff(llava_buffer* outbuf, llava_buffer* w3_matrix, llava_buffer* w1_matrix, llava_buffer* inbuf, initializer_list<vk::Event> events) {
-    assert(w3_matrix->shape == w1_matrix->shape);
-    assert(inbuf->shape.second == 1);
-    assert(outbuf->shape.second == 1);
-    assert(inbuf->shape.first == model->header.dim);
-    assert(outbuf->shape.first == model->ff_size);
-
-    assert(outbuf->shape.first % (4 * specialization_variables.matmul_dim_row_per_wavefront) == 0);
-    return record_command("matmul_silu_ff", {outbuf, w3_matrix, w1_matrix, inbuf}, events, outbuf->shape.first / (specialization_variables.matmul_dim_row_per_wavefront * 4));
-}
-
-vk::Event llava_context::kv_copy(llava_buffer* out_cache, llava_buffer* input_line, initializer_list<vk::Event> events) {
-    assert(out_cache->shape.first == backlog_size);
-    assert(out_cache->shape.second == model->header.dim);
-    assert(input_line->shape.first == model->header.dim);
-    assert(input_line->shape.second == 1);
-    return record_command("copy_to_cache", {config_buffer, out_cache, input_line}, events, model->header.dim);
-}
-
-vk::Event llava_context::multi_head_attention(llava_buffer* out_buffer, llava_buffer* cache_buffer, llava_buffer* query, initializer_list<vk::Event> events) {
-    assert(cache_buffer->shape.first == backlog_size);
-    assert(cache_buffer->shape.second == model->header.dim);
-
-    assert(query->shape.first == model->header.dim);
-    assert(query->shape.second == 1);
-
-    assert(out_buffer->shape.first == backlog_size);
-    assert(out_buffer->shape.second == model->header.n_heads);
-
-    return record_command("mhsa", {out_buffer, cache_buffer, query}, events, updiv(model->header.n_heads * backlog_size, workgroup_size));
-}
-
-vk::Event llava_context::inplace_softmax(llava_buffer* inout_buffer, initializer_list<vk::Event> events) {
-    assert(inout_buffer->shape.first == backlog_size);
-    assert(inout_buffer->shape.second == model->header.n_heads);
-
-    return record_command("softmax", {config_buffer, inout_buffer}, events, updiv(model->header.n_heads, specialization_variables.softmax_head_per_wavefront));
-}
-
-vk::Event llava_context::add(llava_buffer* buf, llava_buffer* delta_buf, initializer_list<vk::Event> events) {
-    return record_command("add_logits", {buf, delta_buf}, events, updiv(model->header.dim, workgroup_size));
-}
-
-vk::Event llava_context::rope(llava_buffer* buf, initializer_list<vk::Event> events) {
-    assert((model->header.rot % 2) == 0);
-    return record_command("rope", {config_buffer, buf}, events, updiv(buf->shape.first / 2, workgroup_size));
-}
-
-vk::Event llava_context::perform_kqv_matching(llava_buffer* v_out, llava_buffer* v_cache, llava_buffer* softmax_out, initializer_list<vk::Event> events) {
-    assert(v_out and v_cache and softmax_out);
-
-    assert(v_out->shape.first == model->header.dim);
-    assert(v_out->shape.second == 1);
-
-    assert(v_cache->shape.first == backlog_size);
-    assert(v_cache->shape.second == model->header.dim);
-
-    assert(softmax_out->shape.first == backlog_size);
-    assert(softmax_out->shape.second == model->header.n_heads);
-
-    return record_command("kqv_matching", {v_out, v_cache, softmax_out}, events, updiv(model->header.dim, specialization_variables.softmax_head_per_wavefront));
-}
-
-vk::Event llava_context::record_command(llava_pipeline *pipeline,
-                                      const initializer_list<llava_buffer *> &buffers,
-                                      const initializer_list<vk::Event> &events,
-                                      uint32_t countX,
-                                      uint32_t countY,
-                                      uint32_t countZ) {
-    return command_buffer.emplace_back(pipeline, buffers, events, countX, countY, countZ).completionEvent;
-}
-
-void llava_context::reset_command_buffer_events() {
-    for (auto& x : command_buffer) {
-        device.resetEvent(x.completionEvent);
-    }
-}
-
-vk::Event llava_context::record_command(const string &pipeline_name, const initializer_list<llava_buffer *> &buffers, const initializer_list<vk::Event> &events, uint32_t countX, uint32_t countY,
-                                      uint32_t countZ) {
-    u32 buffer_count = 0;
-    for(llava_buffer * buffer : buffers) {
-        buffer_count += buffer->get_sub_buffers().size();
-    }
-    auto* pipeline = get_pipeline(pipeline_name, buffer_count);
-    return record_command(pipeline, buffers, events, countX, countY, countZ);
-}
-
-string llava_context::generate_spevar_define_string() const {
-    stringstream ss;
-    ss << "#define HEAD_COUNT " << specialization_variables.head_count << "\n";
-    ss << "#define QUARTERROT " << specialization_variables.quarterrot << "\n";
-    ss << "#define BACKLOG " << specialization_variables.backlog << "\n";
-    ss << "#define MAX_WGS " << specialization_variables.max_wgs << "\n";
-    ss << "#define MAX_WGS_BITS " << specialization_variables.max_wgs_bits << "\n";
-    ss << "#define FF_SIZE " << specialization_variables.ff_size << "\n";
-    ss << "#define SOFTMAX_HEAD_PER_WAVEFRONT " << specialization_variables.softmax_head_per_wavefront << "\n";
-    ss << "#define BACKLOG_BITS " << specialization_variables.backlog_bits << "\n";
-    ss << "#define ROT_BITS " << specialization_variables.rot_bits << "\n";
-    ss << "#define ROT " << specialization_variables.rot << "\n";
-    ss << "#define MATMUL_DIM_ROW_PER_WAVEFRONT " << specialization_variables.matmul_dim_row_per_wavefront << "\n";
-    ss << "#define MATMUL_DIM_ROW_WORKER_COUNT " << specialization_variables.matmul_dim_row_worker_count << "\n";
-    ss << "#define MATMUL_DIM_ROW_WORKER_COUNT_LOG2 " << specialization_variables.matmul_dim_row_worker_count_log2 << "\n";
-    ss << "#define MATMUL_DIM_Q4_BLOCK_COUNT_PER_WORKER " << specialization_variables.matmul_dim_q4_block_count_per_worker << "\n";
-    ss << "#define MATMUL_DIM_Q4_BLOCKS_PER_ROW " << specialization_variables.matmul_dim_q4_blocks_per_row << "\n";
-    ss << "#define MATMUL_FF_ROW_PER_WAVEFRONT " << specialization_variables.matmul_ff_row_per_wavefront << "\n";
-    ss << "#define MATMUL_FF_ROW_WORKER_COUNT " << specialization_variables.matmul_ff_row_worker_count << "\n";
-    ss << "#define MATMUL_FF_ROW_WORKER_COUNT_LOG2 " << specialization_variables.matmul_ff_row_worker_count_log2 << "\n";
-    ss << "#define MATMUL_FF_Q4_BLOCK_COUNT_PER_WORKER " << specialization_variables.matmul_ff_q4_block_count_per_worker << "\n";
-    ss << "#define MATMUL_FF_Q4_BLOCKS_PER_ROW " << specialization_variables.matmul_ff_q4_blocks_per_row << "\n";
-    return ss.str();
+bool llava_context::signal_debug_on() const {
+    return signal_debug;
 }

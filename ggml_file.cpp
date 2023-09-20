@@ -8,6 +8,7 @@
 #include <utility>
 #include "ggml_file.h"
 #include "types.h"
+#include "utils.h"
 
 using namespace std;
 
@@ -46,7 +47,6 @@ ggml_file::ggml_file(const char *filepath) : header{} {
     assert(mapping_size > sizeof(ggml_header));
     memcpy(&header, mapping, sizeof(ggml_header));
     assert(header.magic == 0x67676a74);
-    assert(header.file_version == 1);
     assert(header.vocab_size > 0);
     assert(header.n_heads > 0);
     assert(header.n_layers > 0);
@@ -70,26 +70,24 @@ void ggml_file::read_token() {
     assert(mapping + token_size <= mapping + mapping_size);
 
     ggml_token& token = tokens.emplace_back();
-    token.text.resize(token_size);
-    if (token_size) {
-        ::memcpy(token.text.data(), cursor, token_size);
-    }
+    token.text = string((const char*)cursor, token_size);
     cursor += token_size;
 
     token.score = read_scalar<float>();
 }
 
 void ggml_file::read_data() {
+    size_t cursor_save = cursor - mapping;
     auto n_dims = read_scalar<u32>();
     auto name_len = read_scalar<u32>();
     auto ftype = read_scalar<u32>();
-    assert(ftype <= 3);
     assert(n_dims > 0);
     assert(n_dims < 3);
-    auto shape1 = read_scalar<u32>();
-    auto shape2 = (n_dims == 2) ? read_scalar<u32>() : 1;
+    u32 shape1 = read_scalar<u32>();
+    u32 shape2 = 1;
     if (n_dims == 2) {
-        ::swap(shape1, shape2);
+        shape2 = shape1;
+        shape1 = read_scalar<u32>();
     }
     vector<char> name;
     name.reserve(name_len + 1);
@@ -97,14 +95,28 @@ void ggml_file::read_data() {
     if (name_len) {
         ::memcpy(name.data(), cursor, name_len);
     }
+
     cursor += name_len;
     for(char c : name) {
         assert(c);
     }
     name.emplace_back(0);
+    if (not ((ftype <= 3) or (ftype == 8))) {
+        cerr << "Bad format for matrix in input file" << endl;
+        const char* type_name = ftype_name(static_cast<ggml_value_type>(ftype));
+        cerr << "Unsupported type ";
+        if (type_name) {
+            cerr << type_name;
+        } else {
+            cerr << ftype;
+        }
+        cerr << " for table " << name.data() << " at offset 0x" << hex << cursor_save << dec << endl;
+        exit(1);
+    }
+
     size_t offset = (cursor - mapping);
     offset = (offset + 31) & (~31UL);
-    auto& new_table = tables.emplace_back(string(name.data()), static_cast<ggml_value_type>(ftype), offset, shape1, shape2);
+    auto& new_table = tables.emplace_back(string(name.data()), static_cast<ggml_value_type>(ftype), 0+header.file_version, offset, shape1, shape2);
     assert(name_to_index.emplace(new_table.name, tables.size() - 1).second);
     cursor = mapping + new_table.offset + new_table.size;
 }
@@ -134,10 +146,12 @@ void ggml_file::print_info() const {
 
 ggml_data_descriptor::ggml_data_descriptor(std::string _name,
                                            ggml_value_type _ftype,
+                                           u32 _model_version,
                                            size_t _offset,
                                            int32_t _shape1,
                                            int32_t _shape2) : name(std::move(_name)),
                                                               ftype(_ftype),
+                                                              model_version(_model_version),
                                                               offset(_offset),
                                                               shape1(_shape1),
                                                               shape2(_shape2),
@@ -152,31 +166,54 @@ size_t ggml_data_descriptor::size_in_file() const {
     if (ftype == ggml_value_type::f32) {
         return shape1 * shape2 * 4;
     }
-    size_t base_size = shape1 * shape2 * ((ftype == ggml_value_type::q4_0) ? 20 : 24);
-    assert((base_size % 32) == 0);
-    return base_size / 32;
+    assert(((shape1 * shape2) % 32) == 0); // This condition is slightly too restrictive, to be changed if this fails
+    size_t sz = shape1 * shape2;
+    if (ftype == ggml_value_type::q4_0) {
+        if (model_version == 1) {
+            return (sz * 20) / 32;
+        } else {
+            return (sz * 18) / 32;
+        }
+    } else if (ftype == ggml_value_type::q8_0) {
+        if (model_version == 1) {
+            return (sz * 36) / 32;
+        } else {
+            return (sz * 34) / 32;
+        }
+    }
+
+    assert (false);
 }
 
-size_t ggml_data_descriptor::size_for_type(ggml_value_type _ftype) const {
-    if (_ftype == ggml_value_type::f16) {
-        return shape1 * shape2 * 2;
-    }
-    if (_ftype == ggml_value_type::f32) {
-        return shape1 * shape2 * 4;
-    }
-    size_t base_size = shape1 * shape2 * ((_ftype == ggml_value_type::q4_0) ? 20 : 24);
-    assert((base_size % 32) == 0);
-    return base_size / 32;
-}
+struct llama_sp_symbol {
+    using index = int;
+    index prev;
+    index next;
+    const char * text;
+    size_t n;
+};
 
-// The following function were copied from llama.cpp source
-void ggml_file::try_add_bigram(int left, int right) {
+struct llama_sp_bigram {
+    struct comparator {
+        bool operator()(llama_sp_bigram & l, llama_sp_bigram & r) {
+            return (l.score < r.score) || (l.score == r.score && l.left > r.left);
+        }
+    };
+    using queue_storage = std::vector<llama_sp_bigram>;
+    using queue = std::priority_queue<llama_sp_bigram, queue_storage, comparator>;
+    llama_sp_symbol::index left;
+    llama_sp_symbol::index right;
+    float score;
+    size_t size;
+};
+
+void try_add_bigram(int left, int right, vector<llama_sp_symbol>& symbols, llama_sp_bigram::queue& work_queue, vector<ggml_token> const& tokens) {
     if ((left == -1) or (right == -1)) {
         return;
     }
 
-    size_t seek_size = symbols_.at(left).n + symbols_.at(right).n;
-    char const* seek_addr = symbols_.at(left).text;
+    size_t seek_size = symbols.at(left).n + symbols.at(right).n;
+    char const* seek_addr = symbols.at(left).text;
     for (u32 j = 0; j < tokens.size(); ++j) {
 #ifdef LLAMA_CPP_ISO
             u32 k = tokens.size() - 1 - j;
@@ -187,12 +224,12 @@ void ggml_file::try_add_bigram(int left, int right) {
         if (token.text.size() != seek_size) {
             continue;
         }
-        if (memcmp(token.text.data(), seek_addr, seek_size) != 0) {
+        if (memcmp(token.text.c_str(), seek_addr, seek_size) != 0) {
             continue;
         }
 
         // Found
-        work_queue_.push({
+        work_queue.push({
             .left = left,
             .right = right,
             .score = token.score,
@@ -207,41 +244,43 @@ static size_t utf8_len(char src) {
     return lookup[static_cast<uint8_t>(src) >> 4];
 }
 
-void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text, bool bos) {
+void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text, bool bos) const {
     if (text.empty()) {
-        output.clear();
         return;
     }
+
+    vector<llama_sp_symbol> symbols;
+    llama_sp_bigram::queue work_queue;
 
     if (bos) {
         output.push_back(1);
     }
 
     // split string into utf8 chars
-    for (size_t offs = 0; offs < text.size(); offs += symbols_.back().n) {
-        llama_sp_symbol& sym = symbols_.emplace_back();
+    for (size_t offs = 0; offs < text.size(); offs += symbols.back().n) {
+        llama_sp_symbol& sym = symbols.emplace_back();
         size_t char_len = std::min(text.size() - offs, utf8_len(text[offs]));
         sym.text = text.c_str() + offs;
         sym.n = char_len;
-        sym.next = static_cast<int>(symbols_.size());
+        sym.next = static_cast<int>(symbols.size());
         sym.prev = sym.next - 2;
     }
 
-    assert(not symbols_.empty());
-    symbols_.back().next = -1;
+    assert(not symbols.empty());
+    symbols.back().next = -1;
 
     // seed the work queue with all possible 2-character tokens.
-    for (int i = 1; i < symbols_.size(); ++i) {
-        try_add_bigram(i - 1, i);
+    for (int i = 1; i < symbols.size(); ++i) {
+        try_add_bigram(i - 1, i, symbols, work_queue, tokens);
     }
 
     // keep substituting the highest frequency pairs for as long as we can.
-    while (not work_queue_.empty()) {
-        auto bigram = work_queue_.top();
-        work_queue_.pop();
+    while (not work_queue.empty()) {
+        auto bigram = work_queue.top();
+        work_queue.pop();
 
-        auto& left_sym = symbols_.at(bigram.left);
-        auto& right_sym = symbols_.at(bigram.right);
+        auto& left_sym = symbols.at(bigram.left);
+        auto& right_sym = symbols.at(bigram.right);
 
         // if one of the symbols already got merged, skip it.
         if (left_sym.n == 0 || right_sym.n == 0 ||
@@ -256,16 +295,16 @@ void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text,
         // remove the right sym from the chain
         left_sym.next = right_sym.next;
         if (right_sym.next >= 0) {
-            symbols_[right_sym.next].prev = bigram.left;
+            symbols[right_sym.next].prev = bigram.left;
         }
 
         // find more substitutions
-        try_add_bigram(left_sym.prev, bigram.left);
-        try_add_bigram(bigram.left, left_sym.next);
+        try_add_bigram(left_sym.prev, bigram.left, symbols, work_queue, tokens);
+        try_add_bigram(bigram.left, left_sym.next, symbols, work_queue, tokens);
     }
 
-    for (int i = 0; i != -1; i = symbols_[i].next) {
-        auto & symbol = symbols_[i];
+    for (int i = 0; i != -1; i = symbols[i].next) {
+        auto & symbol = symbols[i];
         bool found = false;
         for (uint32_t j = 0; j < tokens.size(); ++j) {
 #ifdef LLAMA_CPP_ISO
@@ -277,7 +316,7 @@ void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text,
             if (token.text.size() != symbol.n) {
                 continue;
             }
-            if (memcmp(token.text.data(), symbol.text, symbol.n) != 0) {
+            if (memcmp(token.text.c_str(), symbol.text, symbol.n) != 0) {
                 continue;
             }
             found = true;
@@ -295,10 +334,6 @@ void ggml_file::tokenize(std::vector<uint32_t> &output, const std::string& text,
     }
 }
 
-std::vector<ggml_data_descriptor> const &ggml_file::get_buffers() {
-    return tables;
-}
-
 ggml_data_descriptor const &ggml_file::get_buffer_descriptor(const string &s) const {
     if (auto it = name_to_index.find(s); it != name_to_index.end()) {
         return tables.at(it->second);
@@ -306,4 +341,25 @@ ggml_data_descriptor const &ggml_file::get_buffer_descriptor(const string &s) co
     auto jt = name_to_index.find(s + ".weight");
     assert(jt != name_to_index.end());
     return tables.at(jt->second);
+}
+
+string ggml_file::tokens_to_text(const u32 * _tokens, u32 count) const {
+    u32 sz = 0;
+    for(u32 j = 0; j < count; ++j) {
+        sz += tokens.at(_tokens[j]).text.size();
+    }
+    string res;
+    res.reserve(sz + 1);
+    for(u32 j = 0; j < count; ++j) {
+        res += tokens.at(_tokens[j]).text;
+    }
+    return res;
+}
+
+std::vector<ggml_token> const &ggml_file::get_tokens() const {
+    return tokens;
+}
+
+bool ggml_file::is_open() const {
+    return (mapping != nullptr) and (mapping != MAP_FAILED);
 }

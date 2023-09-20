@@ -24,11 +24,11 @@ layout (binding = 1) buffer readonly MatrixDBuffer {
 } matd;
 
 layout (binding = 2) buffer readonly MatrixQBuffer {
-    uvec4 values[][4];
+    uvec4 values[][8];
 } matq;
 
 layout (binding = 3) buffer readonly InFBuffer {
-    vec4 values[][4][2]; // [Z][MATMUL_Q4_BLOCKS_PER_ROW][4][2]
+    vec4 values[][8]; // [Z][MATMUL_Q4_BLOCKS_PER_ROW][4][2]
 } inp;
 
 
@@ -50,13 +50,11 @@ void main()
         vec4 block_mat_value = vec4(0.);
         uint block_id = min(t * MATMUL_Y + worker_id, MATMUL_Q4_BLOCKS_PER_ROW - 1);
 
-        [[unroll]] for (int block_block_id = 0; block_block_id < 4; block_block_id++) {
+        [[unroll]] for (int block_block_id = 0; block_block_id < 8; block_block_id++) {
             uvec4 sub_block = matq.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
-            mat4 m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][0];
-            sub_block >>= 16;
-            m = mat4(vec4(sub_block & 0xf), vec4((sub_block >> 4) & 0xf), vec4((sub_block >> 8) & 0xf), vec4((sub_block >> 12) & 0xf));
-            block_mat_value += (m - 8.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id][1];
+            // sub_block ^= 0x80808080;
+            mat4 m = mat4(vec4(sub_block & 0xff), vec4((sub_block >> 8) & 0xff), vec4((sub_block >> 16) & 0xff), vec4((sub_block >> 24) & 0xff));
+            block_mat_value += (m - 128.) * inp.values[z_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id][block_block_id];
         }
         if (t * MATMUL_Y + worker_id < MATMUL_Q4_BLOCKS_PER_ROW) {
             worker_sum += block_mat_value * vec4(matd.values[row_id * MATMUL_Q4_BLOCKS_PER_ROW + block_id]);
@@ -72,3 +70,4 @@ void main()
     #endif
     }
 }
+
