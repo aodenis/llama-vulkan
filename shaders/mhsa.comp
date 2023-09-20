@@ -43,6 +43,7 @@ void main()
         vec2 raw_K = current_k.values[z_id * HEAD_COUNT * 2 * QUARTERROT + head_id * 2 * QUARTERROT + i];
         vec2 raw_Q = vec2(q_cache.values[clamped_row_id * 2 * QUARTERROT + i]);
 
+        // Perform RoPE computation
         float d_theta = float(config.token_count + z_id - q_index) * pow(10000.0, -float(i)/float(2 * QUARTERROT));
         float ct = cos(d_theta);
         float st = sin(d_theta);
@@ -53,7 +54,7 @@ void main()
         result += dot(raw_K, rot_mat * raw_Q);
     }
 
-    if (clamped_row_id == row_id) {
+    if (row_id < BACKLOG * HEAD_COUNT) {
         outp.values[z_id * BACKLOG * HEAD_COUNT + row_id] = result;
     }
 }

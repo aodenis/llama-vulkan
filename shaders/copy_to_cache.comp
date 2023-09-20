@@ -31,5 +31,7 @@ void main()
     const uint i = gl_GlobalInvocationID.x;
     const uint z_id = gl_GlobalInvocationID.z * BATCH_ENABLED;
 
-    cache.values[(config.token_count + z_id) * DIM + i] = float16_t(inp.values[i + DIM * z_id]);
+    if (i < DIM) {
+        cache.values[(config.token_count + z_id) * DIM + i] = float16_t(inp.values[i + DIM * z_id]);
+    }
 }

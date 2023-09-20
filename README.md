@@ -12,11 +12,10 @@ Vulkan 1.2 is used and no extension is required.
 
 * Tokenizer
 * GGML parsing and mapping for q4_0, q8_0 models
-* Evaluation of 7B models
+* Evaluation of 7B models and 13B models
 
 ## Known issues
 
-* Evaluation 13B models fail due to a NaN value corrupting the shader values. This is being fixed
 * Threading (for server mode) uses mutex and may deadlock
 * Too many asserts can fire
 

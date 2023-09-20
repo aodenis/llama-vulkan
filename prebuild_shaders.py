@@ -9,9 +9,11 @@ import subprocess as sp
 # File struct : [name offset, content offset, size]
 # Shader are consecutive in data
 
+
 def main():
     if not os.path.exists("prebuilt_shaders"):
         os.mkdir("prebuilt_shaders", mode=0o755)
+
     else:
         for x in os.listdir("prebuilt_shaders"):
             if x.endswith(".spv"):

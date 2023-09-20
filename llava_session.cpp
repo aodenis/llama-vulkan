@@ -191,7 +191,6 @@ u32 llava_session::get_last_predicted_token(bool deterministic) {
     int idx = dist(rng);
 
     mirostat_mu += mirostat_eta * (mirostat_tau + log2f(pulled_data.at(idx) / new_sum));
-
     return back_id.at(idx);
 }
 
@@ -199,6 +198,7 @@ bool llava_session::start_next_token_prediction() {
     ensure_buffers_created();
     u32 const to_process = token_buffer.size() - current_tokens_in_gpu;
     if (to_process == 0) {
+        cerr << "GPU is already in sync" << endl;
         return false;
     }
     set_batch_size(to_process);
@@ -250,6 +250,8 @@ void llava_session::set_batch_size(u32 _batch_size) {
     batch_size = _batch_size;
 
     recreate_buffers();
+    flush_layers_data_buffers();
+    recreate_spevars();
 }
 
 bool llava_session::set_text(const string& new_text) {
@@ -388,7 +390,7 @@ void llava_session::recreate_spevars() {
 void llava_session::rewind(u32 n) {
     if (n < token_buffer.size()) {
         token_buffer.resize(n);
-        current_tokens_in_gpu = n;
+        current_tokens_in_gpu = min(n, current_tokens_in_gpu);
     }
 }
 
@@ -422,10 +424,6 @@ bool llava_session::is_tracing_enabled() const {
 ReturnCode llava_session::save_frame(const string &path) {
     if (not is_tracing_enabled()) {
         return ReturnCode::not_tracing;
-    }
-
-    if (batch_size > 1) {
-        return ReturnCode::batched_tick;
     }
 
     int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);

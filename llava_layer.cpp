@@ -40,7 +40,7 @@ llava_buffer* llava_layer::execute(llava_command_buffer *cmd_buf, llava_layer_se
     // if raw_input_logit is null, not recorded
     llava_session *session = layer_data->session;
 
-    bool record = (session->batch_size == 1) and (layer_data->attn_result != nullptr);
+    bool record = (layer_data->attn_result != nullptr);
 
     llava_buffer* c_input_logit = record ? raw_input_logit : session->current_thought;
     llava_buffer* c_input_norm_logit = record ? layer_data->normalized_input_logit : session->current_thought_sublayer;

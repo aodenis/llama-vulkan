@@ -55,9 +55,10 @@ void llava_layer_session_data::flush_buffers_on_gpu() {
     bool tracing_was_enabled = (attn_result != nullptr);
     bool tracing_enabled = this->session->is_tracing_enabled();
     u32 old_size = k_cache ? k_cache->shape.first : 0;
+    u32 old_batch_size = ff_result ? ff_result->shape.second : 0;
 
-    if ((session->backlog_size == old_size) and (tracing_was_enabled == tracing_enabled)) {
-        return;
+    if ((session->backlog_size == old_size) and (tracing_was_enabled == tracing_enabled) and (not tracing_enabled or (old_batch_size == session->batch_size))) {
+        return; // no change
     }
 
     u32 smallest_size = min(old_size, session->backlog_size);
@@ -75,59 +76,69 @@ void llava_layer_session_data::flush_buffers_on_gpu() {
     llava_buffer *next_output_logit = nullptr;
     llava_buffer *next_post_attn_norm_logit = nullptr;
 
-    if (tracing_enabled) {
-        next_attn_result = new llava_buffer(context, ggml_value_type::f32, session->backlog_size, n_heads, next_layer_cache_allocation, "attn_result");
-        next_ff_result = new llava_buffer(context, ggml_value_type::f32, ff_size, 1, next_layer_cache_allocation, "ff_result");
-        next_normalized_input_logit = new llava_buffer(context, ggml_value_type::f32, dim, 1, next_layer_cache_allocation, "normalized_input_logit");
-        next_post_attn_logit = new llava_buffer(context, ggml_value_type::f32, dim, 1, next_layer_cache_allocation, "post_attn_logit");
-        next_post_attn_norm_logit = new llava_buffer(context, ggml_value_type::f32, dim, 1, next_layer_cache_allocation, "post_attn_norm_logit");
-        next_output_logit = new llava_buffer(context, ggml_value_type::f32, dim, 1, next_layer_cache_allocation, "output_logit");
+    if (tracing_enabled and session->batch_size) {
+        next_attn_result = new llava_buffer(context, ggml_value_type::f32, session->backlog_size, n_heads * session->batch_size, next_layer_cache_allocation, "attn_result");
+        next_ff_result = new llava_buffer(context, ggml_value_type::f32, ff_size, session->batch_size, next_layer_cache_allocation, "ff_result");
+        next_normalized_input_logit = new llava_buffer(context, ggml_value_type::f32, dim, session->batch_size, next_layer_cache_allocation, "normalized_input_logit");
+        next_post_attn_logit = new llava_buffer(context, ggml_value_type::f32, dim, session->batch_size, next_layer_cache_allocation, "post_attn_logit");
+        next_post_attn_norm_logit = new llava_buffer(context, ggml_value_type::f32, dim, session->batch_size, next_layer_cache_allocation, "post_attn_norm_logit");
+        next_output_logit = new llava_buffer(context, ggml_value_type::f32, dim, session->batch_size, next_layer_cache_allocation, "output_logit");
     }
+
+    u32 batch_size_to_copy = min(old_batch_size, session->batch_size);
+    u32 batch_size_src_offset = old_batch_size - batch_size_to_copy;
+    u32 batch_size_dst_offset = session->batch_size - batch_size_to_copy;
 
     next_layer_cache_allocation->freeze();
 
+    vector<vk::CommandBuffer> commandBuffers;
+    {
+        lock_guard guard(context->command_pool_mutex);
+        commandBuffers = context->get_device().allocateCommandBuffers({context->get_command_pool(), vk::CommandBufferLevel::ePrimary, 1});
+    }
+    commandBuffers.front().begin(vk::CommandBufferBeginInfo());
     if (layer_cache_allocation != nullptr) {
-        vector<vk::CommandBuffer> commandBuffers;
-        {
-            lock_guard guard(context->command_pool_mutex);
-            commandBuffers = context->get_device().allocateCommandBuffers({context->get_command_pool(), vk::CommandBufferLevel::ePrimary, 1});
-        }
-
-        commandBuffers.front().begin(vk::CommandBufferBeginInfo());
         commandBuffers.front().copyBuffer(*(k_cache->get_sub_buffers().front().buffer), *(next_k_cache->get_sub_buffers().front().buffer), {{0, 0, 2 * smallest_size * dim}});
         commandBuffers.front().copyBuffer(*(v_cache->get_sub_buffers().front().buffer), *(next_v_cache->get_sub_buffers().front().buffer), {{0, 0, 2 * smallest_size * dim}});
-        if (next_ff_result and ff_result) {
-            commandBuffers.front().copyBuffer(*(ff_result->get_sub_buffers().front().buffer), *(next_ff_result->get_sub_buffers().front().buffer), {{0, 0, 4 * ff_size}});
+        if(smallest_size < session->backlog_size) {
+            commandBuffers.front().fillBuffer( *(next_k_cache->get_sub_buffers().front().buffer), 2 * smallest_size * dim, VK_WHOLE_SIZE, 0);
+            commandBuffers.front().fillBuffer( *(next_v_cache->get_sub_buffers().front().buffer), 2 * smallest_size * dim, VK_WHOLE_SIZE, 0);
+        }
+        /* if (next_ff_result and ff_result) {
+            commandBuffers.front().copyBuffer(*(ff_result->get_sub_buffers().front().buffer), *(next_ff_result->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * ff_size, batch_size_dst_offset * 4 * ff_size, batch_size_to_copy * 4 * ff_size}});
         }
         if (next_normalized_input_logit and normalized_input_logit) {
-            commandBuffers.front().copyBuffer(*(normalized_input_logit->get_sub_buffers().front().buffer), *(next_normalized_input_logit->get_sub_buffers().front().buffer), {{0, 0, 4 * dim}});
+            commandBuffers.front().copyBuffer(*(normalized_input_logit->get_sub_buffers().front().buffer), *(next_normalized_input_logit->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * dim, batch_size_dst_offset * 4 * dim, batch_size_to_copy * 4 * dim}});
         }
         if (next_post_attn_logit and post_attn_logit) {
-            commandBuffers.front().copyBuffer(*(post_attn_logit->get_sub_buffers().front().buffer), *(next_post_attn_logit->get_sub_buffers().front().buffer), {{0, 0, 4 * dim}});
+            commandBuffers.front().copyBuffer(*(post_attn_logit->get_sub_buffers().front().buffer), *(next_post_attn_logit->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * dim, batch_size_dst_offset * 4 * dim, batch_size_to_copy * 4 * dim}});
         }
         if (next_post_attn_norm_logit and post_attn_norm_logit) {
-            commandBuffers.front().copyBuffer(*(post_attn_norm_logit->get_sub_buffers().front().buffer), *(next_post_attn_norm_logit->get_sub_buffers().front().buffer), {{0, 0, 4 * dim}});
+            commandBuffers.front().copyBuffer(*(post_attn_norm_logit->get_sub_buffers().front().buffer), *(next_post_attn_norm_logit->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * dim, batch_size_dst_offset * 4 * dim, batch_size_to_copy * 4 * dim}});
         }
         if (next_output_logit and output_logit) {
-            commandBuffers.front().copyBuffer(*(output_logit->get_sub_buffers().front().buffer), *(next_output_logit->get_sub_buffers().front().buffer), {{0, 0, 4 * dim}});
+            commandBuffers.front().copyBuffer(*(output_logit->get_sub_buffers().front().buffer), *(next_output_logit->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * dim, batch_size_dst_offset * 4 * dim, batch_size_to_copy * 4 * dim}});
         }
         if (next_attn_result and attn_result) {
-            commandBuffers.front().copyBuffer(*(attn_result->get_sub_buffers().front().buffer), *(next_attn_result->get_sub_buffers().front().buffer), {{0, 0, 4 * smallest_size * n_heads}});
-        }
-        commandBuffers.front().end();
+            commandBuffers.front().copyBuffer(*(attn_result->get_sub_buffers().front().buffer), *(next_attn_result->get_sub_buffers().front().buffer), {{batch_size_src_offset * 4 * smallest_size * n_heads, batch_size_dst_offset * 4 * smallest_size * n_heads, batch_size_to_copy * 4 * smallest_size * n_heads}});
+        } */
+    } else {
+        commandBuffers.front().fillBuffer( *(next_k_cache->get_sub_buffers().front().buffer), 0, VK_WHOLE_SIZE, 0);
+        commandBuffers.front().fillBuffer( *(next_v_cache->get_sub_buffers().front().buffer), 0, VK_WHOLE_SIZE, 0);
+    }
 
+    commandBuffers.front().end();
 
-        {
-            lock_guard guard(context->queue_mutex);
-            vk::SubmitInfo submitInfo({}, {}, commandBuffers, {});
-            session->ctx->get_queue().submit(submitInfo);
-            session->ctx->get_queue().waitIdle();
-        }
+    {
+        lock_guard guard(context->queue_mutex);
+        vk::SubmitInfo submitInfo({}, {}, commandBuffers, {});
+        session->ctx->get_queue().submit(submitInfo);
+        session->ctx->get_queue().waitIdle();
+    }
 
-        {
-            lock_guard guard(context->command_pool_mutex);
-            commandBuffers.clear();
-        }
+    {
+        lock_guard guard(context->command_pool_mutex);
+        commandBuffers.clear();
     }
 
     delete attn_result;

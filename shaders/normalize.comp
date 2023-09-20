@@ -38,24 +38,26 @@ void main()
 
     float mean_part = 0;
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)];
-        mean_part += dot(element, vec4(1.));
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), (DIM / 4) - 1)];
+        if (managed_count * i + j < (DIM / 4)) {
+            mean_part += dot(element, vec4(1.));
+        }
     }
 
     const float mean = local_sum(0, i, mean_part) / DIM;
     mean_part = 0;
 
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)];
-        element = ((managed_count * i + j) < DIM) ? (element - vec4(mean)) : vec4(0.);
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), (DIM / 4) - 1)];
+        element = ((managed_count * i + j) < (DIM / 4)) ? (element - vec4(mean)) : vec4(0.);
         mean_part += dot(element, element);
     }
 
     mean_part = inversesqrt(local_sum(0, i, mean_part) / DIM);
 
     [[unroll]] for (int j = 0; j < managed_count; j++) {
-        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)] * weights.values[min((managed_count * i + j), DIM - 1)];
-        if (managed_count * i + j < DIM) {
+        vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), (DIM/4) - 1)] * weights.values[min((managed_count * i + j), (DIM/4) - 1)];
+        if (managed_count * i + j < (DIM / 4)) {
             outp.values[z_id * (DIM / 4) + managed_count * i + j] = element * mean_part;
         }
     }
