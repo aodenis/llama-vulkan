@@ -39,9 +39,7 @@ void main()
     float mean_part = 0;
     [[unroll]] for (int j = 0; j < managed_count; j++) {
         vec4 element = inp.values[z_id * (DIM / 4) + min((managed_count * i + j), DIM - 1)];
-        if (managed_count * i + j < DIM) {
-            mean_part += dot(element, vec4(1.));
-        }
+        mean_part += dot(element, vec4(1.));
     }
 
     const float mean = local_sum(0, i, mean_part) / DIM;

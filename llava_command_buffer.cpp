@@ -138,7 +138,7 @@ void llava_command_buffer::kv_copy(llava_buffer *out_cache, llava_buffer *input_
     assert(out_cache->shape.second == model->header.dim);
     assert(input_line->shape.first == model->header.dim);
     assert(input_line->shape.second == batch_size);
-    return record_command("copy_to_cache", {out_cache, session->config_buffer, input_line}, updiv(model->header.dim, workgroup_size), 1, batch_size);
+    return record_command("copy_to_cache", {out_cache, session->config_buffer, input_line}, model->header.dim, 1, batch_size);
 }
 
 void llava_command_buffer::copy_logit(llava_buffer *out_logit, llava_buffer *input_logit) {
@@ -148,7 +148,7 @@ void llava_command_buffer::copy_logit(llava_buffer *out_logit, llava_buffer *inp
     assert(out_logit->shape.second == batch_size);
     assert(input_logit->shape.first == model->header.dim);
     assert(input_logit->shape.second == batch_size);
-    return record_command("copy", {out_logit, input_logit}, updiv(model->header.dim, workgroup_size), 1, batch_size);
+    return record_command("copy", {out_logit, input_logit}, model->header.dim, 1, batch_size);
 }
 
 void llava_command_buffer::multi_head_attention(llava_buffer *out_buffer, llava_buffer *cache_buffer, llava_buffer *query) {
